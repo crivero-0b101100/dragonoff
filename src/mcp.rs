@@ -209,8 +209,8 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "dragonoff.track_analyze",
-            "Analyze a finished WAV mix for tempo/key, bars, chords, transients, spectral balance and energy. Set include_ml=true for Demucs separation and Basic Pitch note transcription; the report includes bass per-note envelope, harmonic and pitch-bend evidence, drum-hit decay and pitch trajectories, per-event synth overrides, bar-level mix targets and a native-synth reconstruction spec.",
-            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."},"include_ml":{"type":"boolean","description":"Run optional pretrained Demucs and Basic Pitch. Adds bass note envelope/harmonic/pitch-bend observations, per-hit drum envelope and low-frequency pitch trajectories, event-level synth controls, and a Dragonoff native-synth reconstruction spec. Requires the optional Python packages."},"output_directory":{"type":"string","description":"Directory for separated stems, MIDI/CSV note transcriptions, and the ML analysis report. Required when include_ml is true."}},"required":["wav"]}),
+            "Analyze a finished WAV mix for tempo/key, bars, chords, transients, spectral balance and energy. Set include_ml=true for Demucs separation and Basic Pitch note transcription; the report includes per-note envelope, harmonic, stereo, pitch-bend and synth-control estimates for bass and pitched layers, half-beat chord candidates with voicing evidence, drum-hit decay and pitch trajectories, per-event synth overrides, bar-level mix targets and a native-synth reconstruction spec.",
+            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."},"include_ml":{"type":"boolean","description":"Run optional pretrained Demucs and Basic Pitch. Adds pitched-note envelope, harmonic, stereo, pitch-bend and synth-control estimates; half-beat chord events; per-hit drum envelope and low-frequency pitch trajectories; and a Dragonoff native-synth reconstruction spec. Requires the optional Python packages."},"output_directory":{"type":"string","description":"Directory for separated stems, MIDI/CSV note transcriptions, and the ML analysis report. Required when include_ml is true."}},"required":["wav"]}),
         ),
         tool(
             "dragonoff.track_reconstruct",
@@ -1546,7 +1546,7 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
                     "timing_reference":ml.pointer("/reconstruction_spec/timing").cloned().unwrap_or_else(|| json!({})),
                     "synth_reconstruction_spec_path":"synth_reconstruction_spec"
                 });
-                result["analysis_schema_version"] = json!("4.0");
+                result["analysis_schema_version"] = json!("4.1");
                 result["synth_reconstruction_spec"] = ml
                     .get("synth_reconstruction_spec")
                     .cloned()

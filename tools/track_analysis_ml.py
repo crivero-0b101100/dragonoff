@@ -387,7 +387,8 @@ def align_note_to_grid(start, end, beat_times, tempo):
     }
 
 
-def _bass_note_synth_controls(observation, pitch_curve):
+def _pitched_note_synth_controls(observation, pitch_curve):
+    """Map measured note behavior into Dragonoff controls for any pitched stem."""
     attack = observation.get("attack_to_80_percent_peak_ms_estimate")
     decay = observation.get("decay_60_percent_ms_estimate")
     sustain = observation.get("sustain_level_relative_estimate")
@@ -402,6 +403,15 @@ def _bass_note_synth_controls(observation, pitch_curve):
         "cutoff_hz": round(max(80.0, min(18_000.0, centroid * 2.0)), 1),
         "noise_amount": round(max(0.0, min(0.35, flatness * 0.35)), 3),
     }
+    profiles = observation.get("spectral_profile_by_event_stage", {})
+    attack_centroid = (profiles.get("attack") or {}).get("centroid_hz")
+    late_centroid = (profiles.get("late") or {}).get("centroid_hz")
+    if attack_centroid and late_centroid:
+        # Positive values brighten the onset and close the filter over time.
+        controls["filter_env_amount"] = round(
+            max(-1.5, min(1.5, math.log2(max(1.0, attack_centroid) / max(1.0, late_centroid)) * 0.35)),
+            3,
+        )
     if len(pitch_curve) >= 3 and max(pitch_curve) - min(pitch_curve) >= 0.5:
         # The native synth supports an exponential per-note pitch envelope.
         # Fit its launch amount and decay from the early part of the measured
@@ -413,7 +423,7 @@ def _bass_note_synth_controls(observation, pitch_curve):
     return controls
 
 
-def note_json(events, beat_times, tempo, audio=None, sample_rate=None, stem_role=None):
+def note_json(events, beat_times, tempo, audio=None, sample_rate=None):
     import numpy as np
     import pretty_midi
 
@@ -430,13 +440,17 @@ def note_json(events, beat_times, tempo, audio=None, sample_rate=None, stem_role
         if pitch_bend:
             item["pitch_bend_offset_semitones_estimate"] = [round(float(value) / 3.0, 2) for value in pitch_bend]
         if audio is not None and sample_rate:
-            item["sound_observation"] = event_sound_observation(audio, sample_rate, float(start), float(end), int(pitch))
-            if stem_role == "bass":
-                bend_curve = [float(value) / 3.0 for value in pitch_bend] if pitch_bend is not None else []
-                if bend_curve:
-                    indexes = np.linspace(0, len(bend_curve) - 1, 8).round().astype(int)
-                    item["pitch_trajectory_relative_semitones_8_points"] = [round(bend_curve[index], 3) for index in indexes]
-                item["synth_overrides_estimate"] = _bass_note_synth_controls(item["sound_observation"], bend_curve)
+            observation = event_sound_observation(audio, sample_rate, float(start), float(end), int(pitch))
+            item["sound_observation"] = observation
+            bend_curve = [float(value) / 3.0 for value in pitch_bend] if pitch_bend is not None else []
+            if bend_curve:
+                indexes = np.linspace(0, len(bend_curve) - 1, 8).round().astype(int)
+                item["pitch_trajectory_relative_semitones_8_points"] = [round(bend_curve[index], 3) for index in indexes]
+            if observation.get("measurement_status", "").startswith("measured_audio_window"):
+                item["synth_overrides_estimate"] = _pitched_note_synth_controls(observation, bend_curve)
+                item["synth_overrides_estimate_status"] = "measured_event_features_mapped_heuristically"
+            else:
+                item["synth_overrides_estimate_status"] = "unavailable_for_silent_or_short_event_window"
         output.append(item)
     return output
 
@@ -551,7 +565,7 @@ def _synth_patch_guess(stem, notes):
     }
 
 
-def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_reports, drum_events, chord_bars):
+def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_reports, drum_events, chord_events):
     import numpy as np
 
     bar_count = int(math.ceil(duration * tempo / 240.0))
@@ -568,7 +582,7 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             level = max(0.0, event.get("amplitude_estimate", 0.0))
             velocity = round(36 + 90 * min(1.0, level / max(velocity_scale, 1e-9)) ** 0.5)
             timing = event["timing_on_beat_grid"]
-            controls = event.get("synth_overrides_estimate") if stem == "bass" else None
+            controls = event.get("synth_overrides_estimate")
             note = _dragonoff_note(
                 start,
                 end,
@@ -708,19 +722,48 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
 
     chord_notes = []
     root_map = {name: index for index, name in enumerate(PITCH_NAMES)}
-    for item in chord_bars:
-        parts_of_name = item["chord_candidate"].split()
-        root = root_map.get(parts_of_name[0], 0)
-        quality = parts_of_name[1] if len(parts_of_name) > 1 else "minor"
-        third = 4 if quality == "major" else 3
-        pitches = [48 + root, 48 + root + third, 48 + root + 7]
+    quality_intervals = {
+        "major": [0, 4, 7], "minor": [0, 3, 7], "diminished": [0, 3, 6],
+        "augmented": [0, 4, 8], "sus2": [0, 2, 7], "sus4": [0, 5, 7],
+        "dominant7": [0, 4, 7, 10], "major7": [0, 4, 7, 11], "minor7": [0, 3, 7, 10],
+    }
+    other_notes = next((report["note_events"] for report in stem_reports if report["stem"] == "other"), [])
+    for index, item in enumerate(chord_events):
+        root_name, _, quality = item["chord_candidate"].partition(" ")
+        if root_name == "no_chord":
+            continue
+        root = root_map.get(root_name, 0)
+        intervals = quality_intervals.get(quality, [0, 3, 7])
+        chord_classes = {(root + interval) % 12 for interval in intervals}
+        observed = {}
+        for event in other_notes:
+            overlap = min(item["end_seconds"], event["end_seconds"]) - max(item["start_seconds"], event["start_seconds"])
+            pitch = int(event["pitch_midi"])
+            if overlap > 0 and pitch % 12 in chord_classes and 48 <= pitch <= 84:
+                observed[pitch] = max(observed.get(pitch, 0.0), float(event.get("amplitude_estimate", 0.0)))
+        observed_pitches = sorted(observed, key=lambda pitch: (pitch % 12 not in chord_classes, -observed[pitch], pitch))
+        if len(observed_pitches) >= 3:
+            pitches = sorted(observed_pitches[:5])
+            voicing_source = "basic_pitch_notes_in_other_stem_filtered_to_chord_tones"
+        else:
+            # Put the estimated chord tones in a compact playable register.
+            pitches = [60 + root + interval for interval in intervals]
+            while max(pitches) > 84:
+                pitches = [pitch - 12 for pitch in pitches]
+            voicing_source = "constructed_chord_tones_no_three_note_voicing_evidence"
+        start_beat = max(0.0, item["start_seconds"] * tempo / 60.0)
+        length_beats = max(0.125, (item["end_seconds"] - item["start_seconds"]) * tempo / 60.0)
+        bar = int(start_beat // 4.0) + 1
+        beat = (start_beat % 4.0) + 1.0
         for pitch in pitches:
             chord_notes.append(
                 {
-                    "bar": item["bar"], "beat": 1.0, "tick": 0, "pitch": pitch,
-                    "length_beats": 4.0, "velocity": 68, "channel": 1,
+                    "bar": bar, "beat": round(beat, 5), "tick": 0, "pitch": pitch,
+                    "length_beats": round(length_beats, 5), "velocity": 68, "channel": 1,
+                    "source_chord_event_index": index,
                     "source_chord_candidate": item["chord_candidate"],
                     "source_chord_confidence_uncalibrated": item["confidence"],
+                    "voicing_evidence": voicing_source,
                 }
             )
     parts.append(
@@ -728,8 +771,8 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             "id": "synth_harmonic_bed", "name": "Synth Harmonic Bed", "source_stem": "estimated_bar_harmony",
             "source_type": "synth", "role": "chords",
             "sound": {"waveform": "triangle", "unison": 3, "detune_cents": 7.0, "cutoff_hz": 4_200.0, "attack_ms": 90.0, "decay_ms": 420.0, "sustain": 0.64, "release_ms": 480.0, "stereo_spread": 0.45},
-        "estimate_method": "one_sustained_triad_voicing_per_bar_from_estimated_chord_labels",
-            "estimate_status": "harmonic_placeholder_bar_level_only_not_a_transcribed_chord_rhythm",
+        "estimate_method": "half_beat_chroma_chord_segments_with_stem_note_voicing_evidence_and_explicit_fallback",
+            "estimate_status": "sub_bar_chord_candidates_with_uncalibrated_confidence_and_partial_voicing_evidence",
             "pattern": {"id": "synth_harmonic_bed_events", "bars": bar_count, "notes": chord_notes},
             "source_note_event_count": len(chord_notes),
         }
@@ -760,7 +803,7 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         section["energy"] = round(section["energy"] / max_section_energy, 5)
 
     return {
-        "spec_schema_version": "2.0",
+        "spec_schema_version": "2.1",
         "target_renderer": "dragonoff_native_synth",
         "all_parts_source_type": "synth",
         "instrument_identity_required": False,
@@ -771,8 +814,9 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
                 "decay_ms", "sustain", "release_ms", "cutoff_hz", "filter_env_amount", "noise_amount",
             ],
             "bass_note_path": "parts[id=synth_bass].pattern.notes[*].synth_overrides",
+            "pitched_layer_note_path": "parts[id=synth_pitched_layer|synth_sustained_layer].pattern.notes[*].synth_overrides",
             "drum_hit_path": "parts[id=synth_kick|synth_mid_percussion|synth_bright_percussion].pattern.notes[*].synth_overrides",
-            "fit_status": "measured_event_shape_mapped_to_supported_controls; heuristic_not_original_patch_recovery",
+            "fit_status": "measured_event_shape_mapped_to_supported_controls_for_all_pitched_stems_and_drums; heuristic_not_original_patch_recovery",
         },
         "tempo_bpm": tempo,
         "key": key_name,
@@ -785,23 +829,29 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         "render_instructions": [
             "Create every part with source_type=synth; these roles describe audible function, not real instrument identity.",
             "Use each patch estimate as an initial Dragonoff SoundSettings object and preserve every explicit note event and its synth_overrides.",
-            "Bass notes carry measured envelope, harmonic, stereo, and pitch-bend evidence; synth_overrides fit per-note envelope, filter, noise, and supported pitch-envelope controls.",
+            "Bass, pitched-layer, and sustained-layer notes carry measured envelope, harmonic, stereo, and pitch-bend evidence; synth_overrides fit per-note envelope, filter, noise, and supported pitch-envelope controls.",
             "Drum hits carry transient, decay, band-energy, and low-frequency pitch-trajectory measurements; apply each hit's synth_overrides to vary the native synth per hit.",
             "Use note_transcriptions and bar_sound_profiles as the timing and timbre evidence; pattern notes are the Dragonoff beat-grid conversion.",
             "Match mix_targets_by_bar for relative level, spectral balance, and stereo width while rendering.",
-            "The chord part is a one-chord-per-bar placeholder because this analysis does not yet transcribe intra-bar chord rhythm or voicing.",
+            "The chord part follows half-beat chroma segments; voicings use separated-stem note evidence when at least three chord tones overlap, otherwise generated chord tones are marked as a fallback.",
         ],
         "confidence_and_limits": "Patch values are heuristic initial settings, not recovered original presets. Polyphonic overlap, source separation leakage, and the ambiguity of a mixed recording affect the estimates.",
     }
 
 
-def estimate_chords(other_path, tempo, duration):
+def _load_chroma(other_path):
     import librosa
-    import numpy as np
 
     audio, sample_rate = read_audio(other_path)
     hop = 2048
     chroma = librosa.feature.chroma_cqt(y=audio, sr=sample_rate, hop_length=hop)
+    return chroma, sample_rate, hop
+
+
+def estimate_chords(other_path, tempo, duration, chroma_data=None):
+    import numpy as np
+
+    chroma, sample_rate, hop = chroma_data or _load_chroma(other_path)
     bar_seconds = 4.0 * 60.0 / tempo
     bars = []
     count = int(np.ceil(duration / bar_seconds))
@@ -848,6 +898,130 @@ def estimate_chords(other_path, tempo, duration):
             }
         )
     return bars
+
+
+def estimate_chord_events(other_path, tempo, duration, chroma_data=None):
+    """Estimate chord changes every half beat, then merge stable neighbors."""
+    import numpy as np
+
+    qualities = {
+        "major": [0, 4, 7], "minor": [0, 3, 7], "diminished": [0, 3, 6],
+        "augmented": [0, 4, 8], "sus2": [0, 2, 7], "sus4": [0, 5, 7],
+        "dominant7": [0, 4, 7, 10], "major7": [0, 4, 7, 11], "minor7": [0, 3, 7, 10],
+    }
+    chroma, sample_rate, hop = chroma_data or _load_chroma(other_path)
+    step_seconds = 30.0 / tempo
+    count = max(1, int(math.ceil(duration / step_seconds)))
+    ranked_windows = []
+    for window in range(count):
+        start = window * step_seconds
+        end = min(duration, (window + 1) * step_seconds)
+        first = max(0, int(start * sample_rate / hop))
+        last = min(chroma.shape[1], max(first + 1, int(end * sample_rate / hop)))
+        profile = np.mean(chroma[:, first:last], axis=1)
+        total = float(profile.sum())
+        if total <= 1e-12:
+            ranked_windows.append(
+                {
+                    "window": window,
+                    "start_seconds": start,
+                    "end_seconds": end,
+                    "ranked": [],
+                    "label": "no_chord",
+                    "confidence": 0.0,
+                    "pitch_class_energy_share": {name: 0.0 for name in PITCH_NAMES},
+                }
+            )
+            continue
+        candidates = []
+        for root in range(12):
+            for quality, intervals in qualities.items():
+                chord_pcs = {(root + interval) % 12 for interval in intervals}
+                inside = sum(float(profile[pitch]) for pitch in chord_pcs)
+                outside = total - inside
+                score = (inside - 0.2 * outside) / max(total, 1e-12)
+                candidates.append((score, root, quality, inside / max(total, 1e-12)))
+        candidates.sort(reverse=True)
+        best = candidates[0]
+        margin = (best[0] - candidates[1][0]) / max(abs(best[0]), 1e-12)
+        ranked_windows.append(
+            {
+                "window": window,
+                "start_seconds": start,
+                "end_seconds": end,
+                "ranked": candidates,
+                "label": f"{PITCH_NAMES[best[1]]} {best[2]}",
+                "confidence": max(0.0, min(1.0, margin)),
+                "pitch_class_energy_share": {PITCH_NAMES[i]: round(float(profile[i] / total), 5) for i in range(12)},
+            }
+        )
+
+    # A three-window majority filter removes isolated chord flips while retaining
+    # changes that persist for a beat or longer.
+    stable_labels = []
+    for index, row in enumerate(ranked_windows):
+        neighborhood = [ranked_windows[pos]["label"] for pos in range(max(0, index - 1), min(count, index + 2))]
+        frequencies = {label: neighborhood.count(label) for label in set(neighborhood)}
+        best_count = max(frequencies.values())
+        tied = {label for label, frequency in frequencies.items() if frequency == best_count}
+        stable_labels.append(row["label"] if row["label"] in tied else sorted(tied)[0])
+
+    merged = []
+    for index, row in enumerate(ranked_windows):
+        label = stable_labels[index]
+        if merged and merged[-1]["chord_candidate"] == label:
+            segment = merged[-1]
+            segment["end_seconds"] = round(row["end_seconds"], 4)
+            segment["end_window"] = index
+            for score, root, quality, share in row["ranked"]:
+                candidate = f"{PITCH_NAMES[root]} {quality}"
+                evidence = segment["candidate_evidence"].setdefault(candidate, [0.0, 0.0, 0])
+                evidence[0] += float(score)
+                evidence[1] += float(share)
+                evidence[2] += 1
+            segment["window_count"] += 1
+            continue
+        candidate_evidence = {}
+        for score, root, quality, share in row["ranked"]:
+            candidate = f"{PITCH_NAMES[root]} {quality}"
+            candidate_evidence[candidate] = [float(score), float(share), 1]
+        segment = {
+            "start_seconds": round(row["start_seconds"], 4),
+            "end_seconds": round(row["end_seconds"], 4),
+            "start_window": index,
+            "end_window": index,
+            "chord_candidate": label,
+            "window_count": 1,
+            "pitch_class_energy_share": row["pitch_class_energy_share"],
+            "candidate_evidence": candidate_evidence,
+        }
+        merged.append(segment)
+    for segment in merged:
+        evidence = segment.pop("candidate_evidence")
+        averaged = [
+            (values[0] / values[2], chord, values[1] / values[2])
+            for chord, values in evidence.items()
+            if values[2] > 0
+        ]
+        averaged.sort(reverse=True)
+        chosen_score = next((score for score, chord, _share in averaged if chord == segment["chord_candidate"]), 0.0)
+        runner_up = max((score for score, chord, _share in averaged if chord != segment["chord_candidate"]), default=0.0)
+        segment["confidence"] = round((chosen_score - runner_up) / max(abs(chosen_score), 1e-12), 5)
+        segment["confidence_method"] = "selected_candidate_vs_runner_up_mean_template_score_margin_uncalibrated"
+        segment["top_candidates"] = [
+            {
+                "chord": chord,
+                "template_score_uncalibrated": round(float(score), 5),
+                "chord_tone_energy_share": round(float(share), 5),
+            }
+            for score, chord, share in averaged[:5]
+        ]
+        segment["start_bar_one_based"] = int(segment["start_seconds"] * tempo / 240.0) + 1
+        segment["start_beat_in_bar_one_based"] = round((segment["start_seconds"] * tempo / 60.0) % 4.0 + 1.0, 4)
+        segment["end_bar_one_based"] = int(max(0.0, segment["end_seconds"] - 1e-6) * tempo / 240.0) + 1
+        segment["duration_beats"] = round((segment["end_seconds"] - segment["start_seconds"]) * tempo / 60.0, 5)
+        segment["window_count"] = int(segment["window_count"])
+    return merged
 
 
 def merge_chord_bars(bars):
@@ -976,7 +1150,7 @@ def run(args):
         csv_path = midi_dir / f"{stem}.csv"
         midi.write(str(midi_path))
         save_note_events(events, csv_path)
-        notes = note_json(events, beat_times, args.tempo, stem_audio, stem_sample_rate, stem_role=stem)
+        notes = note_json(events, beat_times, args.tempo, stem_audio, stem_sample_rate)
         bar_sound_profiles = _part_sound_profile(stem, notes, duration, args.tempo, stem_audio, stem_sample_rate)
         stem_reports.append(
             {
@@ -985,13 +1159,19 @@ def run(args):
                 "midi_path": str(midi_path),
                 "note_events_csv": str(csv_path),
                 "note_event_count": len(notes),
+                "synth_override_estimate_count": sum("synth_overrides_estimate" in note for note in notes),
+                "synth_override_estimate_coverage": round(
+                    sum("synth_overrides_estimate" in note for note in notes) / len(notes), 5
+                ) if notes else 0.0,
                 "note_event_order": "ascending start_seconds, then pitch_midi",
                 "note_events": notes,
                 "bar_sound_profiles": bar_sound_profiles,
             }
         )
 
-    chord_bars = estimate_chords(expected_dir / "other.wav", args.tempo, duration)
+    chord_chroma = _load_chroma(expected_dir / "other.wav")
+    chord_bars = estimate_chords(expected_dir / "other.wav", args.tempo, duration, chord_chroma)
+    chord_events = estimate_chord_events(expected_dir / "other.wav", args.tempo, duration, chord_chroma)
     bar_event_map = build_bar_event_map(chord_bars, drum_events, stem_reports, duration, args.tempo)
     synth_reconstruction_spec = build_synth_reconstruction_spec(
         stereo_audio,
@@ -1000,21 +1180,22 @@ def run(args):
         args.tempo,
         stem_reports,
         drum_events,
-        chord_bars,
+        chord_events,
     )
     report = {
-        "analysis_schema_version": "4.0",
+        "analysis_schema_version": "4.1",
         "input_audio": str(audio_path),
         "duration_seconds": round(duration, 4),
         "models": {
             "source_separation": model_name,
             "note_transcription": "Spotify Basic Pitch ICASSP 2022 pretrained model",
-            "bass_synth_control_estimation": "per-note envelope and harmonic observations with Basic Pitch bend-curve fit",
+            "pitched_synth_control_estimation": "per-note envelope, harmonic, stereo, filter-envelope, and Basic Pitch bend-curve fits for bass, other, and vocals stems",
+            "chord_event_estimation": "half-beat chroma templates with temporal majority smoothing and note-transcription voicing evidence",
             "drum_synth_control_estimation": "per-hit transient decay and low-frequency pitch-trajectory fit",
             "synth_patch_estimation": "measured event profiles mapped heuristically to supported Dragonoff synth controls",
             "training_performed": False,
         },
-        "limitations": "Source separation can leak sounds between stems. Note events and sound-shape measurements are model estimates and are not manually corrected; amplitude_estimate is not calibrated confidence or MIDI velocity. Bass per-note synth controls and drum hit roles, pitch sweeps, and envelopes are evidence-based heuristic fits, not recovered original settings. Drum role scores derive from frequency-band energy and are uncalibrated. Chord confidence is an uncalibrated score margin, not a probability. Chord labels are estimates from the separated accompaniment; the synth harmonic bed uses one sustained triad per bar and does not recover chord rhythm or voicing.",
+        "limitations": "Source separation can leak sounds between stems. Note events and sound-shape measurements are model estimates and are not manually corrected; amplitude_estimate is not calibrated confidence or MIDI velocity. Per-note synth controls and drum hit roles, pitch sweeps, and envelopes are evidence-based heuristic fits, not recovered original settings. Drum role scores derive from frequency-band energy and are uncalibrated. Bar and half-beat chord labels use uncalibrated template margins; voicing evidence comes from overlapping Basic Pitch notes in the mixed 'other' stem and may include non-chord layers. Fallback chord tones are generated when fewer than three observed chord-tone notes overlap.",
         "stems": [
             {"stem": name, "audio_path": str(expected_dir / f"{name}.wav")}
             for name in required_stems
@@ -1027,6 +1208,7 @@ def run(args):
         "chords": {
             "per_bar": chord_bars,
             "progression": merge_chord_bars(chord_bars),
+            "sub_bar_events": chord_events,
         },
         "bar_event_map": bar_event_map,
         "synth_reconstruction_spec": synth_reconstruction_spec,
@@ -1045,6 +1227,7 @@ def run(args):
                 "bass": "note_transcriptions[stem=bass].note_events",
                 "other": "note_transcriptions[stem=other].note_events",
                 "vocals": "note_transcriptions[stem=vocals].note_events",
+                "chord_timeline": "chords.sub_bar_events",
                 "synth_parts": "synth_reconstruction_spec.parts",
                 "chords_as_synth_events": "synth_reconstruction_spec.parts[id=synth_harmonic_bed].pattern.notes",
             },
