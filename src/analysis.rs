@@ -3,8 +3,9 @@
 
 //! Lightweight, dependency-free analysis of a finished stereo or mono WAV mix.
 //!
-//! These estimates describe audible properties of the mix. They do not recover
-//! the original multitrack session, instruments, or effect settings.
+//! These estimates describe audible properties of the mix. Optional ML output
+//! can propose synth settings from the observed sound, but cannot identify a
+//! unique original multitrack session or patch.
 
 use serde::Serialize;
 use std::fs::File;
@@ -23,6 +24,7 @@ pub struct TrackAnalysis {
     pub key: String,
     pub key_confidence: f64,
     pub spectral_balance: SpectralBalance,
+    pub stereo: StereoCharacter,
     pub sections: Vec<EnergySection>,
     pub bars: Vec<BarAnalysis>,
     pub chord_progression: Vec<ChordSegment>,
@@ -36,6 +38,42 @@ pub struct SpectralBalance {
     pub low_below_180_hz: f64,
     pub mid_180_to_4000_hz: f64,
     pub high_above_4000_hz: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StereoCharacter {
+    pub rms_dbfs: f64,
+    pub peak_dbfs: f64,
+    pub channel_correlation: f64,
+    pub side_to_mid_db: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReconstructionComparison {
+    pub reference: String,
+    pub reconstruction: String,
+    pub duration_difference_seconds: f64,
+    pub tempo_difference_bpm: f64,
+    pub key_matches: bool,
+    pub chord_match_fraction: f64,
+    pub bar_energy_correlation: f64,
+    pub rms_difference_db: f64,
+    pub peak_difference_db: f64,
+    pub spectral_balance_difference: SpectralBalance,
+    pub stereo_correlation_difference: f64,
+    pub side_to_mid_difference_db: f64,
+    pub per_bar: Vec<BarComparison>,
+    pub recommended_adjustments: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BarComparison {
+    pub bar: usize,
+    pub reference_energy: f64,
+    pub reconstruction_energy: f64,
+    pub reference_chord: String,
+    pub reconstruction_chord: String,
+    pub chord_matches: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,6 +174,7 @@ pub fn analyze_wav(path: &Path) -> Result<TrackAnalysis, String> {
     let chord_progression = merge_chords(&bars);
     let transient_events = detect_transients(&mono, wav.sample_rate, beat_interval_seconds);
     let sound_character = characterize_sound(&band_energy, total, &sections);
+    let stereo = stereo_character(&wav);
 
     Ok(TrackAnalysis {
         source: path.display().to_string(),
@@ -152,13 +191,187 @@ pub fn analyze_wav(path: &Path) -> Result<TrackAnalysis, String> {
             mid_180_to_4000_hz: band_energy[1] / total,
             high_above_4000_hz: band_energy[2] / total,
         },
+        stereo,
         sections,
         bars,
         chord_progression,
         transient_events,
         sound_character,
-        limitations: "Bars assume a 4/4 meter and begin on the file start; tempo, chords, key and transient labels are estimates from the mixed audio. Transients are not confirmed drum hits. The built-in pass does not separate stems or transcribe notes. The optional ML pass can provide candidate stems and note events, but cannot recover original instruments, synth patches, or effect settings.",
+        limitations: "Bars assume a 4/4 meter and begin on the file start; tempo, chords, key and transient labels are estimates from the mixed audio. Transients are not confirmed drum hits. The built-in pass does not separate stems or transcribe notes. The optional ML pass can provide candidate stems, note events, sound observations and heuristic synth settings, but cannot uniquely recover original instruments, patches, or effects.",
     })
+}
+
+pub fn compare_wavs(
+    reference_path: &Path,
+    reconstruction_path: &Path,
+) -> Result<ReconstructionComparison, String> {
+    let reference = analyze_wav(reference_path)?;
+    let reconstruction = analyze_wav(reconstruction_path)?;
+    let bar_count = reference.bars.len().min(reconstruction.bars.len());
+    let per_bar: Vec<BarComparison> = reference
+        .bars
+        .iter()
+        .zip(&reconstruction.bars)
+        .take(bar_count)
+        .map(|(left, right)| BarComparison {
+            bar: left.bar,
+            reference_energy: left.relative_energy,
+            reconstruction_energy: right.relative_energy,
+            reference_chord: left.chord.clone(),
+            reconstruction_chord: right.chord.clone(),
+            chord_matches: left.chord == right.chord,
+        })
+        .collect();
+    let chord_match_fraction = if bar_count == 0 {
+        0.0
+    } else {
+        per_bar.iter().filter(|bar| bar.chord_matches).count() as f64 / bar_count as f64
+    };
+    let bar_energy_correlation = pearson(
+        &per_bar
+            .iter()
+            .map(|bar| bar.reference_energy)
+            .collect::<Vec<_>>(),
+        &per_bar
+            .iter()
+            .map(|bar| bar.reconstruction_energy)
+            .collect::<Vec<_>>(),
+    );
+    let rms_difference_db = reconstruction.stereo.rms_dbfs - reference.stereo.rms_dbfs;
+    let peak_difference_db = reconstruction.stereo.peak_dbfs - reference.stereo.peak_dbfs;
+    let low_difference = reconstruction.spectral_balance.low_below_180_hz
+        - reference.spectral_balance.low_below_180_hz;
+    let mid_difference = reconstruction.spectral_balance.mid_180_to_4000_hz
+        - reference.spectral_balance.mid_180_to_4000_hz;
+    let high_difference = reconstruction.spectral_balance.high_above_4000_hz
+        - reference.spectral_balance.high_above_4000_hz;
+    let stereo_correlation_difference =
+        reconstruction.stereo.channel_correlation - reference.stereo.channel_correlation;
+    let side_to_mid_difference_db =
+        reconstruction.stereo.side_to_mid_db - reference.stereo.side_to_mid_db;
+    let mut recommended_adjustments = Vec::new();
+    let duration_difference_seconds = reconstruction.duration_seconds - reference.duration_seconds;
+    if duration_difference_seconds.abs() > 0.05 {
+        recommended_adjustments.push(format!(
+            "Trim or extend the final render by {:.3} seconds to match the source duration.",
+            -duration_difference_seconds
+        ));
+    }
+    if rms_difference_db.abs() > 1.0 {
+        recommended_adjustments.push(format!(
+            "Adjust overall track gain by approximately {:.1} dB.",
+            -rms_difference_db
+        ));
+    }
+    if side_to_mid_difference_db.abs() > 3.0 {
+        recommended_adjustments.push(format!(
+            "Adjust stereo width; the reconstruction side-to-mid level differs by {:.1} dB.",
+            side_to_mid_difference_db
+        ));
+    }
+    if low_difference.abs() > 0.08 {
+        recommended_adjustments.push(format!("Rebalance low-band energy; the reconstruction differs by {:.3} of total spectral energy.", low_difference));
+    }
+    if mid_difference.abs() > 0.08 {
+        recommended_adjustments.push(format!("Rebalance mid-band energy; the reconstruction differs by {:.3} of total spectral energy.", mid_difference));
+    }
+    if high_difference.abs() > 0.04 {
+        recommended_adjustments.push(format!("Rebalance high-band energy; the reconstruction differs by {:.3} of total spectral energy.", high_difference));
+    }
+    if (reconstruction.tempo_bpm - reference.tempo_bpm).abs() > 0.5 {
+        recommended_adjustments.push(format!(
+            "Correct tempo by approximately {:.2} BPM.",
+            reference.tempo_bpm - reconstruction.tempo_bpm
+        ));
+    }
+    if chord_match_fraction < 0.8 {
+        recommended_adjustments.push(
+            "Review harmonic note events; per-bar chord candidates disagree with the reference."
+                .into(),
+        );
+    }
+    if bar_energy_correlation < 0.8 {
+        recommended_adjustments.push("Adjust per-section and per-bar layer levels; the energy contour differs from the reference.".into());
+    }
+    Ok(ReconstructionComparison {
+        reference: reference.source,
+        reconstruction: reconstruction.source,
+        duration_difference_seconds,
+        tempo_difference_bpm: reconstruction.tempo_bpm - reference.tempo_bpm,
+        key_matches: reference.key == reconstruction.key,
+        chord_match_fraction,
+        bar_energy_correlation,
+        rms_difference_db,
+        peak_difference_db,
+        spectral_balance_difference: SpectralBalance {
+            low_below_180_hz: low_difference,
+            mid_180_to_4000_hz: mid_difference,
+            high_above_4000_hz: high_difference,
+        },
+        stereo_correlation_difference,
+        side_to_mid_difference_db,
+        per_bar,
+        recommended_adjustments,
+    })
+}
+
+fn pearson(left: &[f64], right: &[f64]) -> f64 {
+    if left.len() != right.len() || left.len() < 2 {
+        return 0.0;
+    }
+    let mean_left = left.iter().sum::<f64>() / left.len() as f64;
+    let mean_right = right.iter().sum::<f64>() / right.len() as f64;
+    let covariance = left
+        .iter()
+        .zip(right)
+        .map(|(a, b)| (a - mean_left) * (b - mean_right))
+        .sum::<f64>();
+    let variance_left = left
+        .iter()
+        .map(|value| (value - mean_left).powi(2))
+        .sum::<f64>();
+    let variance_right = right
+        .iter()
+        .map(|value| (value - mean_right).powi(2))
+        .sum::<f64>();
+    covariance / (variance_left * variance_right).sqrt().max(1e-15)
+}
+
+fn stereo_character(wav: &Wav) -> StereoCharacter {
+    let mut squared_sum = 0.0;
+    let mut peak: f64 = 0.0;
+    let mut left_right = 0.0;
+    let mut left_squared = 0.0;
+    let mut right_squared = 0.0;
+    let mut mid_squared = 0.0;
+    let mut side_squared = 0.0;
+    let mut count = 0usize;
+    for frame in wav.samples.chunks_exact(wav.channels) {
+        for sample in frame {
+            squared_sum += sample * sample;
+            peak = peak.max(sample.abs());
+        }
+        let left = frame[0];
+        let right = *frame.get(1).unwrap_or(&left);
+        left_right += left * right;
+        left_squared += left * left;
+        right_squared += right * right;
+        let mid = (left + right) * 0.5;
+        let side = (left - right) * 0.5;
+        mid_squared += mid * mid;
+        side_squared += side * side;
+        count += 1;
+    }
+    let sample_count = (count * wav.channels).max(1) as f64;
+    let rms = (squared_sum / sample_count).sqrt();
+    let correlation = left_right / (left_squared * right_squared).sqrt().max(1e-15);
+    let width_db = 10.0 * (side_squared / mid_squared.max(1e-15)).max(1e-15).log10();
+    StereoCharacter {
+        rms_dbfs: 20.0 * rms.max(1e-15).log10(),
+        peak_dbfs: 20.0 * peak.max(1e-15).log10(),
+        channel_correlation: if wav.channels < 2 { 1.0 } else { correlation },
+        side_to_mid_db: if wav.channels < 2 { -120.0 } else { width_db },
+    }
 }
 
 fn read_wav(path: &Path) -> Result<Wav, String> {

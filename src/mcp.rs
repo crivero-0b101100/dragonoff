@@ -203,9 +203,19 @@ fn tool_definitions() -> Vec<Value> {
             json!({"type":"object","properties":{"wav":{"type":"string"}},"required":["wav"]}),
         ),
         tool(
+            "dragonoff.track_reconstruction_compare",
+            "Compare a synthesized render with its source WAV. Reports tempo, key/chord, bar-energy, spectral-balance, loudness and stereo differences, plus suggested parameter adjustments for an automated refinement pass.",
+            json!({"type":"object","properties":{"reference_wav":{"type":"string","description":"Original source WAV used for track_analyze."},"rendered_wav":{"type":"string","description":"Synthesized WAV exported from the reconstructed Dragonoff project."}},"required":["reference_wav","rendered_wav"]}),
+        ),
+        tool(
             "dragonoff.track_analyze",
-            "Analyze a finished WAV mix for estimated tempo/key, a 4/4 bar grid, per-bar chord candidates, transient events, spectral balance, and four-bar energy sections. Set include_ml=true to optionally run pretrained Demucs source separation and Basic Pitch note transcription; this adds beat-mapped note/drum events, chord alternatives, a bar-by-bar layer map, and stem/MIDI/CSV artifacts to output_directory.",
-            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."},"include_ml":{"type":"boolean","description":"Run optional pretrained Demucs source separation, drum-stem onset analysis, chord analysis, and Basic Pitch note transcription. Requires the optional Python packages."},"output_directory":{"type":"string","description":"Directory for separated stems, MIDI/CSV note transcriptions, and the ML analysis report. Required when include_ml is true."}},"required":["wav"]}),
+            "Analyze a finished WAV mix for tempo/key, bars, chords, transients, spectral balance and energy. Set include_ml=true for Demucs separation and Basic Pitch note transcription; the resulting report also contains per-note timbre observations, bar-level mix targets and a native-synth reconstruction spec.",
+            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."},"include_ml":{"type":"boolean","description":"Run optional pretrained Demucs source separation, drum-stem onset analysis, chord analysis, and Basic Pitch note transcription. Adds event-level sound observations and a Dragonoff native-synth reconstruction spec. Requires the optional Python packages."},"output_directory":{"type":"string","description":"Directory for separated stems, MIDI/CSV note transcriptions, and the ML analysis report. Required when include_ml is true."}},"required":["wav"]}),
+        ),
+        tool(
+            "dragonoff.track_reconstruct",
+            "Create a Dragonoff project from a track analysis report. Builds every analyzed part as a native synth track from its reconstruction spec, preserving the extracted notes and estimated sound controls.",
+            json!({"type":"object","properties":{"analysis_json":{"type":"string","description":"Path to track_analysis_ml.json produced by dragonoff.track_analyze with include_ml=true."},"project_path":{"type":"string","description":"Path where the new .dragonoff.json project will be saved."},"title":{"type":"string","description":"Optional project title."}},"required":["analysis_json","project_path"]}),
         ),
         tool(
             "dragonoff.project_save",
@@ -1525,20 +1535,181 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
                         })
                     })
                     .collect();
-                result["analysis_schema_version"] = json!("2.0");
                 result["reconstruction_spec"] = ml
                     .get("reconstruction_spec")
                     .cloned()
                     .unwrap_or_else(|| json!({}));
                 result["reconstruction_map"] = json!({
-                    "description":"Bar-indexed arrangement map combining full-mix energy/harmony estimates with stem-separated event counts and chord alternatives. Detailed timed note and drum events remain in ml_analysis.",
+                    "description":"Bar-indexed arrangement map combining full-mix energy/harmony estimates with stem-separated event counts, chord alternatives, and the synth reconstruction specification. Detailed timed note and sound evidence remain in ml_analysis.",
                     "bars":reconstruction_bars,
                     "event_array_paths":ml.pointer("/reconstruction_spec/layer_event_paths").cloned().unwrap_or_else(|| json!({})),
-                    "timing_reference":ml.pointer("/reconstruction_spec/timing").cloned().unwrap_or_else(|| json!({}))
+                    "timing_reference":ml.pointer("/reconstruction_spec/timing").cloned().unwrap_or_else(|| json!({})),
+                    "synth_reconstruction_spec_path":"synth_reconstruction_spec"
                 });
+                result["analysis_schema_version"] = json!("3.0");
+                result["synth_reconstruction_spec"] = ml
+                    .get("synth_reconstruction_spec")
+                    .cloned()
+                    .unwrap_or(Value::Null);
                 result["ml_analysis"] = ml;
             }
             Ok(result)
+        }
+        "dragonoff.track_reconstruct" => {
+            let analysis_path = PathBuf::from(string(args, "analysis_json")?);
+            let project_path = PathBuf::from(string(args, "project_path")?);
+            let analysis_text = fs::read_to_string(&analysis_path)
+                .map_err(|e| format!("cannot read analysis JSON: {e}"))?;
+            let analysis: Value = serde_json::from_str(&analysis_text)
+                .map_err(|e| format!("invalid analysis JSON: {e}"))?;
+            let spec = analysis
+                .get("synth_reconstruction_spec")
+                .ok_or("analysis JSON has no synth_reconstruction_spec; rerun track_analyze with include_ml=true")?;
+            if spec.get("target_renderer").and_then(Value::as_str) != Some("dragonoff_native_synth")
+            {
+                return Err("analysis synth spec does not target Dragonoff native synth".into());
+            }
+            let bpm = spec
+                .get("tempo_bpm")
+                .and_then(Value::as_f64)
+                .ok_or("synth spec is missing tempo_bpm")?;
+            if !(60.0..=180.0).contains(&bpm) {
+                return Err(
+                    "analysis tempo must be in 60..180 BPM for project reconstruction".into(),
+                );
+            }
+            let key = spec
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("C")
+                .to_string();
+            let scale = spec
+                .get("scale")
+                .and_then(Value::as_str)
+                .unwrap_or("minor")
+                .to_string();
+            let title = args
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    analysis
+                        .get("input_audio")
+                        .and_then(Value::as_str)
+                        .and_then(|p| Path::new(p).file_stem())
+                        .and_then(|s| s.to_str())
+                        .map(|s| format!("{s} Synth Reconstruction"))
+                })
+                .unwrap_or_else(|| "Synth Reconstruction".into());
+            let mut song = Song::fresh(title, bpm, key, scale, 48_000, fresh_project_seed());
+            if let Some(sections) = spec.get("sections") {
+                song.sections = serde_json::from_value(sections.clone())
+                    .map_err(|e| format!("invalid synth spec sections: {e}"))?;
+            }
+            let parts = spec
+                .get("parts")
+                .and_then(Value::as_array)
+                .ok_or("synth spec parts must be an array")?;
+            if parts.is_empty() {
+                return Err("synth spec contains no parts".into());
+            }
+            for part in parts {
+                let id = part
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or("synth part is missing id")?
+                    .to_string();
+                let name = part
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_string();
+                let role = part
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("texture")
+                    .to_string();
+                if part.get("source_type").and_then(Value::as_str) != Some("synth") {
+                    return Err(format!("synth part `{id}` must use source_type=synth"));
+                }
+                let pattern_value = part
+                    .get("pattern")
+                    .ok_or_else(|| format!("synth part `{id}` is missing pattern"))?;
+                let pattern_id = pattern_value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("synth part `{id}` pattern is missing id"))?
+                    .to_string();
+                let pattern_bars = pattern_value
+                    .get("bars")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1) as u32;
+                if pattern_bars == 0 {
+                    return Err(format!(
+                        "synth part `{id}` pattern must span at least one bar"
+                    ));
+                }
+                let source_notes = pattern_value
+                    .get("notes")
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                let note_value = json!({"ticks_per_quarter":480,"midi_events":source_notes});
+                let notes = parse_bulk_notes(&note_value, 4, 4)?;
+                if notes.iter().any(|note| note.bar > pattern_bars) {
+                    return Err(format!("synth part `{id}` has a note outside its pattern"));
+                }
+                let mut track = new_track(id.clone(), name, role);
+                track.source_type = "synth".into();
+                if let Some(sound) = part.get("sound") {
+                    track.sound = merge_settings(&track.sound, sound)?;
+                }
+                validate_sound(&track.sound)?;
+                track.patterns.push(Pattern {
+                    id: pattern_id.clone(),
+                    bars: pattern_bars,
+                    notes,
+                });
+                track.clips.push(Clip {
+                    id: format!("{id}_analysis_clip"),
+                    pattern_id,
+                    start_bar: 1,
+                    bars: pattern_bars,
+                    transpose: 0,
+                });
+                if let Some(points) = part.get("automation").and_then(Value::as_array) {
+                    for point in points {
+                        let automation: AutomationPoint = serde_json::from_value(point.clone())
+                            .map_err(|e| format!("invalid automation in synth part `{id}`: {e}"))?;
+                        let valid_parameter_value = match automation.parameter.as_str() {
+                            "gain_db" => (-60.0..=12.0).contains(&automation.value),
+                            "lowpass_hz" => (20.0..=20_000.0).contains(&automation.value),
+                            _ => false,
+                        };
+                        if !valid_parameter_value
+                            || automation.bar == 0
+                            || automation.bar > pattern_bars
+                            || !(1.0..=5.0).contains(&automation.beat)
+                            || !automation.value.is_finite()
+                        {
+                            return Err(format!("invalid automation in synth part `{id}`"));
+                        }
+                        track.automation.push(automation);
+                    }
+                }
+                song.tracks.push(track);
+            }
+            let path_string = project_path.display().to_string();
+            save_song(&project_path, &song)?;
+            *active = Some(project_path.clone());
+            Ok(
+                json!({"created":path_string,"title":song.title,"bpm":song.bpm,"key":song.key,"scale":song.scale,"bars":song.total_bars(),"track_count":song.tracks.len(),"all_tracks_source_type":"synth","analysis_json":analysis_path}),
+            )
+        }
+        "dragonoff.track_reconstruction_compare" => {
+            let reference = PathBuf::from(string(args, "reference_wav")?);
+            let rendered = PathBuf::from(string(args, "rendered_wav")?);
+            serde_json::to_value(analysis::compare_wavs(&reference, &rendered)?)
+                .map_err(|e| format!("could not serialize reconstruction comparison: {e}"))
         }
         "dragonoff.project_save" => {
             let p = path_for(args, active)?;
