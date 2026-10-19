@@ -204,7 +204,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "dragonoff.track_analyze",
-            "Analyze a finished WAV mix for estimated tempo/key, a 4/4 bar grid, per-bar chord candidates, transient events, spectral balance, and four-bar energy sections. Set include_ml=true to optionally run pretrained Demucs source separation and Basic Pitch note transcription; this writes stem/MIDI/CSV artifacts to output_directory.",
+            "Analyze a finished WAV mix for estimated tempo/key, a 4/4 bar grid, per-bar chord candidates, transient events, spectral balance, and four-bar energy sections. Set include_ml=true to optionally run pretrained Demucs source separation and Basic Pitch note transcription; this adds beat-mapped note/drum events, chord alternatives, a bar-by-bar layer map, and stem/MIDI/CSV artifacts to output_directory.",
             json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."},"include_ml":{"type":"boolean","description":"Run optional pretrained Demucs source separation, drum-stem onset analysis, chord analysis, and Basic Pitch note transcription. Requires the optional Python packages."},"output_directory":{"type":"string","description":"Directory for separated stems, MIDI/CSV note transcriptions, and the ML analysis report. Required when include_ml is true."}},"required":["wav"]}),
         ),
         tool(
@@ -1494,6 +1494,48 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
                 }
                 let ml: Value = serde_json::from_slice(&process.stdout)
                     .map_err(|e| format!("optional ML analysis returned invalid JSON: {e}"))?;
+                let ml_bars = ml
+                    .get("bar_event_map")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let native_bars = result
+                    .get("bars")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let bar_count = ml_bars.len().max(native_bars.len());
+                let reconstruction_bars: Vec<Value> = (0..bar_count)
+                    .map(|index| {
+                        let native = native_bars.get(index).cloned().unwrap_or(Value::Null);
+                        let deep = ml_bars.get(index).cloned().unwrap_or(Value::Null);
+                        json!({
+                            "bar": index + 1,
+                            "start_seconds": native.get("start_seconds").cloned().or_else(|| deep.get("start_seconds_estimate").cloned()).unwrap_or(Value::Null),
+                            "end_seconds": native.get("end_seconds").cloned().or_else(|| deep.get("end_seconds_estimate").cloned()).unwrap_or(Value::Null),
+                            "relative_energy": native.get("relative_energy").cloned().unwrap_or(Value::Null),
+                            "native_mix_chord_candidate": native.get("chord").cloned().unwrap_or(Value::Null),
+                            "native_mix_chord_score_margin": native.get("chord_confidence").cloned().unwrap_or(Value::Null),
+                            "ml_stem_chord_candidate": deep.get("chord_candidate").cloned().unwrap_or(Value::Null),
+                            "ml_stem_chord_interpretation": deep.get("chord_interpretation").cloned().unwrap_or(Value::Null),
+                            "ml_stem_chord_alternatives": deep.get("chord_top_candidates").cloned().unwrap_or_else(|| json!([])),
+                            "strongest_pitch_classes": native.get("strongest_pitch_classes").cloned().unwrap_or_else(|| json!([])),
+                            "note_event_count_by_layer": deep.get("note_event_count_by_layer").cloned().unwrap_or_else(|| json!({})),
+                            "pitch_range_by_layer_midi": deep.get("pitch_range_by_layer_midi").cloned().unwrap_or_else(|| json!({}))
+                        })
+                    })
+                    .collect();
+                result["analysis_schema_version"] = json!("2.0");
+                result["reconstruction_spec"] = ml
+                    .get("reconstruction_spec")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                result["reconstruction_map"] = json!({
+                    "description":"Bar-indexed arrangement map combining full-mix energy/harmony estimates with stem-separated event counts and chord alternatives. Detailed timed note and drum events remain in ml_analysis.",
+                    "bars":reconstruction_bars,
+                    "event_array_paths":ml.pointer("/reconstruction_spec/layer_event_paths").cloned().unwrap_or_else(|| json!({})),
+                    "timing_reference":ml.pointer("/reconstruction_spec/timing").cloned().unwrap_or_else(|| json!({}))
+                });
                 result["ml_analysis"] = ml;
             }
             Ok(result)
