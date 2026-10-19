@@ -713,6 +713,35 @@ pub struct Note {
     pub velocity: u8,
     #[serde(default = "default_channel")]
     pub channel: u8,
+    /// Optional event-level synthesis controls for sound-by-sound reconstruction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synth_overrides: Option<NoteSynthOverrides>,
+}
+
+/// Per-note controls let transient and bass events vary without splitting a
+/// musical part into one track per sound variation.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NoteSynthOverrides {
+    #[serde(default)]
+    pub waveform: Option<String>,
+    #[serde(default)]
+    pub pitch_envelope_semitones: Option<f32>,
+    #[serde(default)]
+    pub pitch_decay_ms: Option<f32>,
+    #[serde(default)]
+    pub attack_ms: Option<f32>,
+    #[serde(default)]
+    pub decay_ms: Option<f32>,
+    #[serde(default)]
+    pub sustain: Option<f32>,
+    #[serde(default)]
+    pub release_ms: Option<f32>,
+    #[serde(default)]
+    pub cutoff_hz: Option<f32>,
+    #[serde(default)]
+    pub filter_env_amount: Option<f32>,
+    #[serde(default)]
+    pub noise_amount: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1041,6 +1070,45 @@ pub fn validate_sound(sound: &SoundSettings) -> Result<(), String> {
         return Err(
             "sound patch controls or oscillator layers are outside their supported ranges".into(),
         );
+    }
+    Ok(())
+}
+
+pub fn validate_note_synth_overrides(overrides: &NoteSynthOverrides) -> Result<(), String> {
+    if overrides.waveform.as_ref().is_some_and(|waveform| {
+        ![
+            "sine", "saw", "square", "triangle", "choir", "brass", "fm", "noise",
+        ]
+        .contains(&waveform.as_str())
+    }) || overrides
+        .pitch_envelope_semitones
+        .is_some_and(|value| !value.is_finite() || !(-24.0..=48.0).contains(&value))
+        || overrides
+            .pitch_decay_ms
+            .is_some_and(|value| !value.is_finite() || !(1.0..=5000.0).contains(&value))
+        || overrides
+            .attack_ms
+            .is_some_and(|value| !value.is_finite() || !(0.0..=5000.0).contains(&value))
+        || overrides
+            .decay_ms
+            .is_some_and(|value| !value.is_finite() || !(0.0..=10000.0).contains(&value))
+        || overrides
+            .sustain
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+        || overrides
+            .release_ms
+            .is_some_and(|value| !value.is_finite() || !(0.0..=10000.0).contains(&value))
+        || overrides
+            .cutoff_hz
+            .is_some_and(|value| !value.is_finite() || !(20.0..=40000.0).contains(&value))
+        || overrides
+            .filter_env_amount
+            .is_some_and(|value| !value.is_finite() || !(-4.0..=4.0).contains(&value))
+        || overrides
+            .noise_amount
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        return Err("note synth overrides contain an unsupported value".into());
     }
     Ok(())
 }

@@ -4,7 +4,7 @@
 // The one-based bar/beat/tick convention and repeated-bar expansion follow the
 // Ardour MCP bulk MIDI JSON behavior (libs/surfaces/mcp_http/mcp_http_server.cc).
 
-use crate::model::Note;
+use crate::model::{Note, NoteSynthOverrides, validate_note_synth_overrides};
 use serde_json::Value;
 
 pub fn parse_bulk_notes(
@@ -119,6 +119,15 @@ pub fn parse_bulk_notes(
             .or_else(|| event.get("v"))
             .and_then(Value::as_u64)
             .unwrap_or(96);
+        let synth_overrides = event
+            .get("synth_overrides")
+            .cloned()
+            .map(serde_json::from_value::<NoteSynthOverrides>)
+            .transpose()
+            .map_err(|error| format!("invalid note synth_overrides: {error}"))?;
+        if let Some(overrides) = &synth_overrides {
+            validate_note_synth_overrides(overrides)?;
+        }
         if velocity > 127 {
             return Err("velocity must be in 0..127".into());
         }
@@ -148,6 +157,7 @@ pub fn parse_bulk_notes(
             length_beats: length,
             velocity: velocity as u8,
             channel: channel as u8,
+            synth_overrides,
         });
     }
 

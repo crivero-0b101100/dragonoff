@@ -1,7 +1,7 @@
 // Copyright (C) 2026 OpenAI
 // This program is free software under the GNU GPL v2 or (at your option) any later version.
 
-use crate::model::{Song, SoundSettings, SynthLayer, Track};
+use crate::model::{NoteSynthOverrides, Song, SoundSettings, SynthLayer, Track};
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -931,12 +931,13 @@ fn safe_id(id: &str) -> String {
         .collect()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SynthNoteEvent {
     start: usize,
     gate: usize,
     pitch: u8,
     velocity: u8,
+    synth_overrides: Option<NoteSynthOverrides>,
 }
 
 #[allow(clippy::too_many_arguments)] // Explicit DSP buffers and musical-time context.
@@ -1048,6 +1049,7 @@ fn render_source(
                             gate: duration,
                             pitch,
                             velocity: note.velocity,
+                            synth_overrides: note.synth_overrides.clone(),
                         });
                     }
                 }
@@ -1096,6 +1098,7 @@ fn render_synth_events(
         if sound.legato
             && let Some(previous) = merged.last_mut()
             && previous.pitch == event.pitch
+            && previous.synth_overrides == event.synth_overrides
             && event.start <= previous.start.saturating_add(previous.gate)
         {
             let end = event.start.saturating_add(event.gate);
@@ -1145,6 +1148,65 @@ fn render_synth_events(
             numerator,
         )
         .clamp(0.0, 30.0) as f32;
+        if let Some(overrides) = event.synth_overrides {
+            if let Some(waveform) = overrides.waveform {
+                note_sound.waveform = waveform.clone();
+                for layer in &mut note_sound.layers {
+                    layer.waveform = waveform.clone();
+                }
+            }
+            if let Some(value) = overrides.pitch_envelope_semitones {
+                note_sound.pitch_envelope_semitones = value;
+            }
+            if let Some(value) = overrides.pitch_decay_ms {
+                note_sound.pitch_decay_ms = value;
+            }
+            if let Some(value) = overrides.attack_ms {
+                note_sound.attack_ms = value;
+            }
+            if let Some(value) = overrides.decay_ms {
+                note_sound.decay_ms = value;
+            }
+            if let Some(value) = overrides.sustain {
+                note_sound.sustain = value;
+            }
+            if let Some(value) = overrides.release_ms {
+                note_sound.release_ms = value;
+            }
+            if let Some(value) = overrides.cutoff_hz {
+                note_sound.cutoff_hz = value;
+                for layer in &mut note_sound.layers {
+                    layer.cutoff_hz = Some(value);
+                }
+            }
+            if let Some(value) = overrides.filter_env_amount {
+                note_sound.filter_env_amount = value;
+            }
+            if let Some(value) = overrides.noise_amount {
+                if note_sound.layers.is_empty() {
+                    let mut layer = SynthLayer {
+                        waveform: note_sound.waveform.clone(),
+                        unison: note_sound.unison,
+                        detune_cents: note_sound.detune_cents,
+                        ..SynthLayer::default()
+                    };
+                    layer.noise_amount = value;
+                    if overrides.cutoff_hz.is_some() {
+                        layer.cutoff_hz = overrides.cutoff_hz;
+                    }
+                    note_sound.layers.push(layer);
+                } else if let Some(layer) = note_sound
+                    .layers
+                    .iter_mut()
+                    .rev()
+                    .find(|layer| layer.waveform == "noise")
+                {
+                    layer.noise_amount = value;
+                } else if let Some(layer) = note_sound.layers.last_mut() {
+                    layer.noise_amount = value;
+                }
+            }
+        }
         synth_note(
             track,
             &note_sound,

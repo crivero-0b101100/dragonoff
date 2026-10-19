@@ -20,6 +20,40 @@ from pathlib import Path
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
+def _relative_envelope(samples, count):
+    import numpy as np
+
+    values = [
+        float(np.sqrt(np.mean(chunk * chunk))) if len(chunk) else 0.0
+        for chunk in np.array_split(samples, count)
+    ]
+    peak = max(values, default=0.0)
+    if peak <= 1e-12:
+        return [0.0] * count
+    return [round(min(1.0, value / peak), 4) for value in values]
+
+
+def _spectral_summary(mono, sample_rate):
+    import numpy as np
+
+    if len(mono) < 16:
+        return {"centroid_hz": None, "flatness": None, "energy_share_low_mid_high": [0.0, 0.0, 0.0]}
+    window = np.hanning(len(mono))
+    power = np.abs(np.fft.rfft(mono * window)) ** 2
+    frequencies = np.fft.rfftfreq(len(mono), 1.0 / sample_rate)
+    total = float(power.sum()) or 1e-20
+    shares = [
+        float(power[(frequencies >= low) & (frequencies < high)].sum() / total)
+        for low, high in ((20.0, 180.0), (180.0, 4_000.0), (4_000.0, sample_rate / 2.0))
+    ]
+    flatness = float(np.exp(np.mean(np.log(power + 1e-20))) / (float(power.mean()) + 1e-20))
+    return {
+        "centroid_hz": round(float((frequencies * power).sum() / total), 1),
+        "flatness": round(flatness, 5),
+        "energy_share_low_mid_high": [round(value, 5) for value in shares],
+    }
+
+
 def read_audio(path, mono=True):
     import librosa
     import numpy as np
@@ -48,7 +82,8 @@ def event_sound_observation(audio, sample_rate, start, end, pitch_midi=None):
     rms = float(np.sqrt(np.mean(mono * mono))) if len(mono) else 0.0
     peak = float(np.max(np.abs(mono))) if len(mono) else 0.0
     if len(mono) < 32:
-        return {"rms_dbfs": -120.0, "peak_dbfs": -120.0}
+        return {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "measurement_status": "window_too_short"}
+    envelope_shape = _relative_envelope(mono, 12)
     if rms < 1e-6:
         return {
             "rms_dbfs": -120.0,
@@ -61,6 +96,8 @@ def event_sound_observation(audio, sample_rate, start, end, pitch_midi=None):
             "post_note_tail_to_event_rms_db_estimate": -120.0,
             "stereo_side_to_mid_db": -120.0,
             "stereo_channel_correlation": 1.0,
+            "relative_amplitude_envelope_12_points": envelope_shape,
+            "harmonic_energy_share_partial_1_to_8": [0.0] * 8 if pitch_midi is not None else None,
             "measurement_status": "silent_window_no_timbre_estimate",
         }
 
@@ -75,15 +112,22 @@ def event_sound_observation(audio, sample_rate, start, end, pitch_midi=None):
     for low, high in ((20.0, 180.0), (180.0, 4_000.0), (4_000.0, sample_rate / 2.0)):
         bands.append(float(power[(frequencies >= low) & (frequencies < high)].sum() / total_power))
     harmonic_ratio = None
+    harmonic_shares = None
     if pitch_midi is not None:
         fundamental = 440.0 * 2.0 ** ((int(pitch_midi) - 69) / 12.0)
         harmonic_energy = 0.0
+        harmonic_parts = []
         for harmonic in range(1, int((sample_rate / 2.0) / fundamental) + 1):
             target = fundamental * harmonic
             width = max(1, int(round(target * len(mono) / sample_rate * 0.015)))
             center = int(round(target * len(mono) / sample_rate))
-            harmonic_energy += float(power[max(0, center - width) : min(len(power), center + width + 1)].sum())
+            part_energy = float(power[max(0, center - width) : min(len(power), center + width + 1)].sum())
+            harmonic_energy += part_energy
+            if harmonic <= 8:
+                harmonic_parts.append(part_energy)
         harmonic_ratio = round(min(1.0, harmonic_energy / total_power), 5)
+        harmonic_shares = [round(min(1.0, value / total_power), 5) for value in harmonic_parts]
+        harmonic_shares.extend([0.0] * (8 - len(harmonic_shares)))
 
     # Estimate attack from the event's short-window RMS envelope.
     window_size = max(1, int(sample_rate * 0.01))
@@ -103,6 +147,20 @@ def event_sound_observation(audio, sample_rate, start, end, pitch_midi=None):
     tail_end = min(frames, tail_start + int(sample_rate * 0.25))
     tail = audio[tail_start:tail_end].mean(axis=1) if tail_end > tail_start else np.zeros(0)
     tail_rms = float(np.sqrt(np.mean(tail * tail))) if len(tail) else 0.0
+    tail_envelope = _relative_envelope(tail, 12) if len(tail) else [0.0] * 12
+    release_index = next((i for i, value in enumerate(tail_envelope) if value <= 0.2), None)
+    stage_profiles = {}
+    for name, first, last in (("attack", 0.0, 0.2), ("body", 0.2, 0.8), ("late", 0.8, 1.0)):
+        left_index = min(len(mono) - 1, int(len(mono) * first))
+        right_index = max(left_index + 1, min(len(mono), int(len(mono) * last)))
+        stage_profiles[name] = _spectral_summary(mono[left_index:right_index], sample_rate)
+    decay_index = next((i for i, value in enumerate(envelope_shape) if value >= 0.8), 0)
+    decay_crossing = next(
+        (i for i in range(decay_index + 1, len(envelope_shape)) if envelope_shape[i] <= envelope_shape[decay_index] * 0.6),
+        None,
+    )
+    decay_ms = round((decay_crossing - decay_index) * len(mono) / 12 / sample_rate * 1000.0, 1) if decay_crossing is not None else None
+    sustain_level = round(float(np.median(envelope_shape[6:])), 4)
     mid = (segment[:, 0] + segment[:, -1]) * 0.5
     side = (segment[:, 0] - segment[:, -1]) * 0.5
     mid_rms = float(np.sqrt(np.mean(mid * mid))) if len(mid) else 0.0
@@ -119,9 +177,16 @@ def event_sound_observation(audio, sample_rate, start, end, pitch_midi=None):
         "harmonic_energy_ratio_at_pitch": harmonic_ratio,
         "energy_share_low_mid_high": [round(value, 5) for value in bands],
         "attack_to_80_percent_peak_ms_estimate": attack_ms,
+        "decay_60_percent_ms_estimate": decay_ms,
+        "sustain_level_relative_estimate": sustain_level,
+        "release_to_20_percent_tail_ms_estimate": round((release_index + 1) * 0.25 / 12 * 1000.0, 1) if release_index is not None else None,
+        "relative_amplitude_envelope_12_points": envelope_shape,
+        "post_note_tail_envelope_12_points": tail_envelope,
+        "spectral_profile_by_event_stage": stage_profiles,
         "post_note_tail_to_event_rms_db_estimate": round(20.0 * math.log10(max(tail_rms, 1e-6) / max(rms, 1e-6)), 2),
         "stereo_side_to_mid_db": round(20.0 * math.log10(max(side_rms, 1e-6) / max(mid_rms, 1e-6)), 2) if side_rms > 1e-6 else -120.0,
         "stereo_channel_correlation": round(correlation, 5),
+        "harmonic_energy_share_partial_1_to_8": harmonic_shares,
         "measurement_status": "measured_audio_window; overlap_and_reverb_tails_can_affect_estimates",
     }
 
@@ -146,6 +211,88 @@ def classify_drum_event(audio, sample_rate, time_seconds):
     label = ["kick-like", "snare/percussion-like", "hat/cymbal-like"][int(np.argmax(bands))]
     total = sum(bands) or 1.0
     return label, [value / total for value in bands]
+
+
+def drum_hit_observation(audio, sample_rate, time_seconds, band_share, label):
+    """Capture the transient, decay, and pitch sweep of one separated drum hit."""
+    import numpy as np
+
+    onset = max(0, int(time_seconds * sample_rate))
+    tail_end = min(len(audio), onset + int(sample_rate * 0.32))
+    hit = audio[onset:tail_end]
+    if len(hit) < 16:
+        return {"measurement_status": "hit_window_too_short", "synth_control_estimate": {}}
+
+    envelope = _relative_envelope(hit, 24)
+    peak_index = max(range(len(envelope)), key=envelope.__getitem__)
+    decay_index = next((i for i in range(peak_index + 1, len(envelope)) if envelope[i] <= 0.2), None)
+    decay_ms = round((decay_index - peak_index) * len(hit) / 24 / sample_rate * 1000.0, 1) if decay_index is not None else 240.0
+    frame_length = min(4096, max(1024, int(0.05 * sample_rate)))
+    frame_length += frame_length % 2
+    hop = max(1, int(0.0125 * sample_rate))
+    trajectory = []
+    for start in range(0, min(len(hit), int(sample_rate * 0.16)), hop):
+        end = min(len(hit), start + frame_length)
+        frame = hit[start:end]
+        if len(frame) < 256:
+            break
+        spectrum = np.abs(np.fft.rfft(frame * np.hanning(len(frame)), n=4096)) ** 2
+        frequencies = np.fft.rfftfreq(4096, 1.0 / sample_rate)
+        low = np.flatnonzero((frequencies >= 25.0) & (frequencies <= 220.0))
+        if len(low) and float(spectrum[low].sum()) > float(spectrum.sum()) * 0.015:
+            peak_bin = int(low[np.argmax(spectrum[low])])
+            trajectory.append({"offset_ms": round(start / sample_rate * 1000.0, 1), "frequency_hz": round(float(frequencies[peak_bin]), 1)})
+
+    stage_profiles = {}
+    mono = hit
+    for name, first, last in (("transient", 0.0, 0.04), ("early_decay", 0.04, 0.12), ("body", 0.12, 0.24), ("tail", 0.24, 0.32)):
+        left = min(len(mono) - 1, int(sample_rate * first))
+        right = max(left + 1, min(len(mono), int(sample_rate * last)))
+        stage_profiles[name] = _spectral_summary(mono[left:right], sample_rate)
+
+    start_pitch = next((point["frequency_hz"] for point in trajectory[:3] if point["frequency_hz"] > 0), None)
+    end_pitch = next((point["frequency_hz"] for point in reversed(trajectory[-4:]) if point["frequency_hz"] > 0), None)
+    pitch_drop = None
+    pitch_decay_ms = None
+    base_pitch_midi = None
+    if start_pitch and end_pitch and start_pitch > end_pitch:
+        pitch_drop = round(min(36.0, 12.0 * math.log2(start_pitch / end_pitch)), 2)
+        pitch_decay_ms = round(max(5.0, min(500.0, (trajectory[-1]["offset_ms"] or 40.0) / 2.0)), 1)
+    if end_pitch:
+        base_pitch_midi = int(max(24, min(84, round(69.0 + 12.0 * math.log2(end_pitch / 440.0)))))
+    transient = stage_profiles["transient"]
+    flatness = transient.get("flatness") or 0.0
+    high_share = transient["energy_share_low_mid_high"][2]
+    noise_amount = round(max(0.0, min(1.0, 0.75 * flatness + 0.35 * high_share)), 3)
+    peak_margin = round(max(band_share) - sorted(band_share)[-2], 5)
+    controls = {
+        "waveform": "sine" if label == "kick-like" else "noise",
+        "pitch_envelope_semitones": pitch_drop if label == "kick-like" else 0.0,
+        "pitch_decay_ms": pitch_decay_ms or 55.0,
+        "attack_ms": round(max(1.0, min(40.0, 2.0 + peak_index * len(hit) / 24 / sample_rate * 1000.0)), 1),
+        "decay_ms": round(max(8.0, min(900.0, decay_ms)), 1),
+        "sustain": 0.0,
+        "release_ms": round(max(10.0, min(500.0, decay_ms * 0.45)), 1),
+        "cutoff_hz": round(max(80.0, min(18_000.0, (transient.get("centroid_hz") or 2000.0) * 1.8)), 1),
+        "filter_env_amount": 0.0,
+        "noise_amount": noise_amount,
+    }
+    return {
+        "measurement_status": "measured_separated_drum_stem; overlapping_hits_and_separation_leakage_can_affect_estimates",
+        "window_duration_ms": round(len(hit) / sample_rate * 1000.0, 1),
+        "relative_amplitude_envelope_24_points": envelope,
+        "decay_to_20_percent_ms_estimate": round(decay_ms, 1),
+        "spectral_profile_by_hit_stage": stage_profiles,
+        "low_frequency_peak_trajectory": trajectory,
+        "pitch_start_hz_estimate": start_pitch,
+        "pitch_late_hz_estimate": end_pitch,
+        "synth_base_pitch_midi_estimate": base_pitch_midi,
+        "pitch_drop_semitones_estimate": pitch_drop,
+        "noise_amount_estimate": noise_amount,
+        "band_class_margin_uncalibrated": peak_margin,
+        "band_class_shares": {"low": round(band_share[0], 5), "mid": round(band_share[1], 5), "high": round(band_share[2], 5)},
+        "synth_control_estimate": controls,
+    }
 
 
 def estimate_drum_events(drum_path, tempo_hint):
@@ -176,6 +323,7 @@ def estimate_drum_events(drum_path, tempo_hint):
     result = []
     for onset_frame, time_seconds in zip(onset_frames, onset_times):
         label, band_share = classify_drum_event(audio, sample_rate, float(time_seconds))
+        hit_observation = drum_hit_observation(audio, sample_rate, float(time_seconds), band_share, label)
         if len(beat_times):
             insertion = int(np.searchsorted(beat_times, time_seconds))
             candidates = [i for i in (insertion - 1, insertion) if 0 <= i < len(beat_times)]
@@ -197,6 +345,11 @@ def estimate_drum_events(drum_path, tempo_hint):
                 "sixteenth_position": subdivision * 4 + 1,
                 "offset_from_nearest_beat_seconds": round(float(time_seconds) - beat_time, 4),
                 "character_estimate": label,
+                "character_candidates_with_uncalibrated_band_scores": {
+                    "kick-like": round(float(band_share[0]), 5),
+                    "snare/percussion-like": round(float(band_share[1]), 5),
+                    "hat/cymbal-like": round(float(band_share[2]), 5),
+                },
                 "band_energy_share_low_mid_high": [round(x, 5) for x in band_share],
                 "onset_strength_relative": round(float(envelope[onset_frame] / max(strength_scale, 1e-12)), 5),
                 "synthesis_role": {
@@ -204,6 +357,7 @@ def estimate_drum_events(drum_path, tempo_hint):
                     "snare/percussion-like": "noisy_mid_synth_percussion",
                     "hat/cymbal-like": "bright_noise_synth_percussion",
                 }.get(label, "unclassified_synth_percussion"),
+                "sound_observation": hit_observation,
             }
         )
     return result, [round(float(value), 4) for value in beat_times]
@@ -233,7 +387,34 @@ def align_note_to_grid(start, end, beat_times, tempo):
     }
 
 
-def note_json(events, beat_times, tempo, audio=None, sample_rate=None):
+def _bass_note_synth_controls(observation, pitch_curve):
+    attack = observation.get("attack_to_80_percent_peak_ms_estimate")
+    decay = observation.get("decay_60_percent_ms_estimate")
+    sustain = observation.get("sustain_level_relative_estimate")
+    release = observation.get("release_to_20_percent_tail_ms_estimate")
+    centroid = observation.get("spectral_centroid_hz") or 1800.0
+    flatness = observation.get("spectral_flatness") or 0.0
+    controls = {
+        "attack_ms": round(max(1.0, min(1200.0, attack if attack is not None else 12.0)), 1),
+        "decay_ms": round(max(10.0, min(2400.0, decay if decay is not None else 180.0)), 1),
+        "sustain": round(max(0.05, min(0.95, sustain if sustain is not None else 0.65)), 3),
+        "release_ms": round(max(10.0, min(1600.0, release if release is not None else 120.0)), 1),
+        "cutoff_hz": round(max(80.0, min(18_000.0, centroid * 2.0)), 1),
+        "noise_amount": round(max(0.0, min(0.35, flatness * 0.35)), 3),
+    }
+    if len(pitch_curve) >= 3 and max(pitch_curve) - min(pitch_curve) >= 0.5:
+        # The native synth supports an exponential per-note pitch envelope.
+        # Fit its launch amount and decay from the early part of the measured
+        # Basic Pitch bend curve; retain the full curve alongside this fit.
+        launch = pitch_curve[0]
+        target = pitch_curve[-1]
+        controls["pitch_envelope_semitones"] = round(max(-24.0, min(48.0, launch - target)), 2)
+        controls["pitch_decay_ms"] = 120.0
+    return controls
+
+
+def note_json(events, beat_times, tempo, audio=None, sample_rate=None, stem_role=None):
+    import numpy as np
     import pretty_midi
 
     output = []
@@ -250,11 +431,17 @@ def note_json(events, beat_times, tempo, audio=None, sample_rate=None):
             item["pitch_bend_offset_semitones_estimate"] = [round(float(value) / 3.0, 2) for value in pitch_bend]
         if audio is not None and sample_rate:
             item["sound_observation"] = event_sound_observation(audio, sample_rate, float(start), float(end), int(pitch))
+            if stem_role == "bass":
+                bend_curve = [float(value) / 3.0 for value in pitch_bend] if pitch_bend is not None else []
+                if bend_curve:
+                    indexes = np.linspace(0, len(bend_curve) - 1, 8).round().astype(int)
+                    item["pitch_trajectory_relative_semitones_8_points"] = [round(bend_curve[index], 3) for index in indexes]
+                item["synth_overrides_estimate"] = _bass_note_synth_controls(item["sound_observation"], bend_curve)
         output.append(item)
     return output
 
 
-def _dragonoff_note(start, end, pitch, velocity, tempo, bar_count, metadata=None):
+def _dragonoff_note(start, end, pitch, velocity, tempo, bar_count, metadata=None, synth_overrides=None):
     beat = max(0.0, start * tempo / 60.0)
     bar_zero = int(beat // 4.0)
     if bar_zero >= bar_count:
@@ -271,6 +458,8 @@ def _dragonoff_note(start, end, pitch, velocity, tempo, bar_count, metadata=None
     }
     if metadata:
         note["source_observation"] = metadata
+    if synth_overrides:
+        note["synth_overrides"] = synth_overrides
     return note
 
 
@@ -324,21 +513,40 @@ def _synth_patch_guess(stem, notes):
     attack = float(np.median(attacks)) if attacks else 20.0
     centroid = float(np.median(centroids)) if centroids else 2500.0
     width_db = float(np.median(side_width)) if side_width else -60.0
+    sound = {
+        "waveform": waveform,
+        "unison": 1,
+        "cutoff_hz": round(max(250.0, min(18_000.0, centroid * 2.2)), 1),
+        "attack_ms": round(max(1.0, min(1200.0, attack)), 1),
+        "decay_ms": 180.0,
+        "sustain": 0.68,
+        "release_ms": 180.0,
+        "stereo_spread": round(max(0.0, min(1.0, 10.0 ** (width_db / 20.0))), 3),
+        "filter_mode": "lowpass",
+    }
+    if stem == "bass":
+        partial_rows = [
+            item.get("harmonic_energy_share_partial_1_to_8")
+            for item in observations
+            if item.get("harmonic_energy_share_partial_1_to_8")
+        ]
+        partials = np.median(np.asarray(partial_rows, dtype=float), axis=0) if partial_rows else np.zeros(8)
+        fundamental_share = float(partials[0]) if len(partials) else 0.0
+        upper_share = float(np.sum(partials[1:])) if len(partials) > 1 else 0.0
+        sub_gain = round(max(0.08, min(0.65, 0.18 + 0.6 * fundamental_share)), 3)
+        body_gain = round(max(0.35, min(1.25, 0.55 + 0.8 * upper_share)), 3)
+        bass_layers = [
+            {"waveform": "sine", "octave": -1, "gain": sub_gain, "noise_amount": 0.0},
+            {"waveform": waveform if waveform != "noise" else "saw", "octave": 0, "gain": body_gain, "noise_amount": round(min(0.2, median_flatness * 0.2), 3)},
+        ]
+        if median_flatness >= 0.18:
+            bass_layers.append({"waveform": "noise", "octave": 0, "gain": 0.16, "noise_amount": round(min(0.65, median_flatness), 3), "cutoff_hz": round(max(500.0, min(12_000.0, centroid * 2.8)), 1)})
+        sound["layers"] = bass_layers
     return {
         "source_type": "synth",
         "role": role,
-        "sound": {
-            "waveform": waveform,
-            "unison": 1,
-            "cutoff_hz": round(max(250.0, min(18_000.0, centroid * 2.2)), 1),
-            "attack_ms": round(max(1.0, min(1200.0, attack)), 1),
-            "decay_ms": 180.0,
-            "sustain": 0.68,
-            "release_ms": 180.0,
-            "stereo_spread": round(max(0.0, min(1.0, 10.0 ** (width_db / 20.0))), 3),
-            "filter_mode": "lowpass",
-        },
-        "estimate_method": "heuristic_mapping_from_note_event_spectral_centroid_flatness_attack_and_stereo_width",
+        "sound": sound,
+        "estimate_method": "measured_note_envelope_spectral_harmonic_and_stereo_features_mapped_to_native_oscillator_layers",
         "estimate_status": "initial_synth_patch_guess_unvalidated",
     }
 
@@ -360,7 +568,16 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             level = max(0.0, event.get("amplitude_estimate", 0.0))
             velocity = round(36 + 90 * min(1.0, level / max(velocity_scale, 1e-9)) ** 0.5)
             timing = event["timing_on_beat_grid"]
-            note = _dragonoff_note(start, end, event["pitch_midi"], velocity, tempo, bar_count)
+            controls = event.get("synth_overrides_estimate") if stem == "bass" else None
+            note = _dragonoff_note(
+                start,
+                end,
+                event["pitch_midi"],
+                velocity,
+                tempo,
+                bar_count,
+                synth_overrides=controls,
+            )
             if note is not None:
                 synth_events.append(note)
         part_id = {"bass": "synth_bass", "other": "synth_pitched_layer", "vocals": "synth_sustained_layer"}.get(stem, f"synth_{stem}")
@@ -406,12 +623,33 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
     drum_groups = {"kick-like": [], "snare/percussion-like": [], "hat/cymbal-like": []}
     for event in drum_events:
         label = event.get("character_estimate", "snare/percussion-like")
-        pitch = {"kick-like": 36, "snare/percussion-like": 48, "hat/cymbal-like": 72}.get(label, 60)
+        if label not in drum_groups:
+            label = "snare/percussion-like"
+        observation = event.get("sound_observation", {})
+        pitch = observation.get("synth_base_pitch_midi_estimate") if label == "kick-like" else None
+        pitch = pitch or {"kick-like": 36, "snare/percussion-like": 48, "hat/cymbal-like": 72}[label]
         start = event["time_seconds"]
-        # A short held synth note excites the native envelope into a drum-like transient.
-        end = start + (0.11 if label == "kick-like" else 0.07)
+        controls = observation.get("synth_control_estimate", {})
+        # The event gate follows its measured decay; each hit also carries
+        # per-note envelope, filter, noise, and pitch-sweep controls.
+        hit_duration = max(0.035, min(0.65, (controls.get("decay_ms", 90.0) + controls.get("release_ms", 45.0)) / 1000.0))
+        end = start + hit_duration
         velocity = round(42 + 78 * min(1.0, event.get("onset_strength_relative", 0.5)))
-        note = _dragonoff_note(start, end, pitch, velocity, tempo, bar_count)
+        note = _dragonoff_note(
+            start,
+            end,
+            pitch,
+            velocity,
+            tempo,
+            bar_count,
+            metadata={
+                "pitch_start_hz_estimate": observation.get("pitch_start_hz_estimate"),
+                "pitch_late_hz_estimate": observation.get("pitch_late_hz_estimate"),
+                "decay_to_20_percent_ms_estimate": observation.get("decay_to_20_percent_ms_estimate"),
+                "band_class_margin_uncalibrated": observation.get("band_class_margin_uncalibrated"),
+            },
+            synth_overrides=controls,
+        )
         if note is not None:
             drum_groups[label].append(note)
     for label, part_id, name, waveform, cutoff in (
@@ -419,6 +657,40 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         ("snare/percussion-like", "synth_mid_percussion", "Synth Mid Percussion", "noise", 5_000.0),
         ("hat/cymbal-like", "synth_bright_percussion", "Synth Bright Percussion", "noise", 12_000.0),
     ):
+        source_events = [
+            event for event in drum_events
+            if event.get("character_estimate") == label
+        ]
+        observations = [event.get("sound_observation", {}) for event in source_events]
+
+        def median_control(name, fallback):
+            values = [
+                item.get("synth_control_estimate", {}).get(name)
+                for item in observations
+                if item.get("synth_control_estimate", {}).get(name) is not None
+            ]
+            return round(float(np.median(values)), 2) if values else fallback
+
+        median_attack = median_control("attack_ms", 1.0)
+        median_decay = median_control("decay_ms", 90.0)
+        median_release = median_control("release_ms", 45.0)
+        median_cutoff = median_control("cutoff_hz", cutoff)
+        median_pitch_sweep = median_control("pitch_envelope_semitones", 18.0 if label == "kick-like" else 0.0)
+        median_pitch_decay = median_control("pitch_decay_ms", 55.0)
+        median_noise = median_control("noise_amount", 0.0 if label == "kick-like" else 0.6)
+        drum_sound = {
+            "waveform": waveform,
+            "cutoff_hz": median_cutoff,
+            "attack_ms": median_attack,
+            "decay_ms": median_decay,
+            "sustain": 0.0,
+            "release_ms": median_release,
+            "pitch_envelope_semitones": median_pitch_sweep,
+            "pitch_decay_ms": median_pitch_decay,
+            "layers": [
+                {"waveform": waveform, "gain": 1.0, "noise_amount": median_noise, "cutoff_hz": median_cutoff}
+            ],
+        }
         parts.append(
             {
                 "id": part_id,
@@ -426,9 +698,9 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
                 "source_stem": "drums",
                 "source_type": "synth",
                 "role": "kick" if label == "kick-like" else "perc",
-                "sound": {"waveform": waveform, "cutoff_hz": cutoff, "attack_ms": 1.0, "decay_ms": 90.0, "sustain": 0.0, "release_ms": 45.0, "pitch_envelope_semitones": 18.0 if label == "kick-like" else 0.0, "pitch_decay_ms": 55.0},
-                "estimate_method": "synthesized_transient_template_selected_from_frequency_band_character_estimate",
-                "estimate_status": "initial_synth_patch_guess_unvalidated",
+                "sound": drum_sound,
+                "estimate_method": "per_hit_transient_envelope_spectral_and_low_frequency_pitch_trajectory_fit",
+                "estimate_status": "measured_controls_with_unvalidated_synth_mapping",
                 "pattern": {"id": f"{part_id}_events", "bars": bar_count, "notes": drum_groups[label]},
                 "source_note_event_count": len(drum_groups[label]),
             }
@@ -488,9 +760,20 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         section["energy"] = round(section["energy"] / max_section_energy, 5)
 
     return {
+        "spec_schema_version": "2.0",
         "target_renderer": "dragonoff_native_synth",
         "all_parts_source_type": "synth",
         "instrument_identity_required": False,
+        "event_synthesis_controls": {
+            "consumer": "Dragonoff Note.synth_overrides; applied per rendered MIDI event",
+            "supported_per_note_fields": [
+                "waveform", "pitch_envelope_semitones", "pitch_decay_ms", "attack_ms",
+                "decay_ms", "sustain", "release_ms", "cutoff_hz", "filter_env_amount", "noise_amount",
+            ],
+            "bass_note_path": "parts[id=synth_bass].pattern.notes[*].synth_overrides",
+            "drum_hit_path": "parts[id=synth_kick|synth_mid_percussion|synth_bright_percussion].pattern.notes[*].synth_overrides",
+            "fit_status": "measured_event_shape_mapped_to_supported_controls; heuristic_not_original_patch_recovery",
+        },
         "tempo_bpm": tempo,
         "key": key_name,
         "scale": key_scale,
@@ -501,7 +784,9 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         "mix_targets_by_bar": mix_targets,
         "render_instructions": [
             "Create every part with source_type=synth; these roles describe audible function, not real instrument identity.",
-            "Use each patch estimate as an initial Dragonoff SoundSettings object and preserve every explicit note event.",
+            "Use each patch estimate as an initial Dragonoff SoundSettings object and preserve every explicit note event and its synth_overrides.",
+            "Bass notes carry measured envelope, harmonic, stereo, and pitch-bend evidence; synth_overrides fit per-note envelope, filter, noise, and supported pitch-envelope controls.",
+            "Drum hits carry transient, decay, band-energy, and low-frequency pitch-trajectory measurements; apply each hit's synth_overrides to vary the native synth per hit.",
             "Use note_transcriptions and bar_sound_profiles as the timing and timbre evidence; pattern notes are the Dragonoff beat-grid conversion.",
             "Match mix_targets_by_bar for relative level, spectral balance, and stereo width while rendering.",
             "The chord part is a one-chord-per-bar placeholder because this analysis does not yet transcribe intra-bar chord rhythm or voicing.",
@@ -691,7 +976,7 @@ def run(args):
         csv_path = midi_dir / f"{stem}.csv"
         midi.write(str(midi_path))
         save_note_events(events, csv_path)
-        notes = note_json(events, beat_times, args.tempo, stem_audio, stem_sample_rate)
+        notes = note_json(events, beat_times, args.tempo, stem_audio, stem_sample_rate, stem_role=stem)
         bar_sound_profiles = _part_sound_profile(stem, notes, duration, args.tempo, stem_audio, stem_sample_rate)
         stem_reports.append(
             {
@@ -718,16 +1003,18 @@ def run(args):
         chord_bars,
     )
     report = {
-        "analysis_schema_version": "3.0",
+        "analysis_schema_version": "4.0",
         "input_audio": str(audio_path),
         "duration_seconds": round(duration, 4),
         "models": {
             "source_separation": model_name,
             "note_transcription": "Spotify Basic Pitch ICASSP 2022 pretrained model",
-            "synth_patch_estimation": "heuristic mapping from measured note and stem sound observations",
+            "bass_synth_control_estimation": "per-note envelope and harmonic observations with Basic Pitch bend-curve fit",
+            "drum_synth_control_estimation": "per-hit transient decay and low-frequency pitch-trajectory fit",
+            "synth_patch_estimation": "measured event profiles mapped heuristically to supported Dragonoff synth controls",
             "training_performed": False,
         },
-        "limitations": "Source separation can leak sounds between stems. Note events and sound-shape measurements are model estimates and are not manually corrected; amplitude_estimate is not calibrated confidence or MIDI velocity. Synth patches are heuristic starting points, not recovered original settings. Drum labels are frequency-based guesses. Chord confidence is an uncalibrated score margin, not a probability. Chord labels are estimates from the separated accompaniment; the synth harmonic bed uses one sustained triad per bar and does not recover chord rhythm or voicing.",
+        "limitations": "Source separation can leak sounds between stems. Note events and sound-shape measurements are model estimates and are not manually corrected; amplitude_estimate is not calibrated confidence or MIDI velocity. Bass per-note synth controls and drum hit roles, pitch sweeps, and envelopes are evidence-based heuristic fits, not recovered original settings. Drum role scores derive from frequency-band energy and are uncalibrated. Chord confidence is an uncalibrated score margin, not a probability. Chord labels are estimates from the separated accompaniment; the synth harmonic bed uses one sustained triad per bar and does not recover chord rhythm or voicing.",
         "stems": [
             {"stem": name, "audio_path": str(expected_dir / f"{name}.wav")}
             for name in required_stems
