@@ -204,8 +204,8 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "dragonoff.track_analyze",
-            "Analyze a finished WAV mix for estimated tempo, key, spectral balance and coarse energy sections. These are signal-based estimates; the tool does not separate stems, transcribe notes, identify instruments, or recover production settings.",
-            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."}},"required":["wav"]}),
+            "Analyze a finished WAV mix for estimated tempo/key, a 4/4 bar grid, per-bar chord candidates, transient events, spectral balance, and four-bar energy sections. Set include_ml=true to optionally run pretrained Demucs source separation and Basic Pitch note transcription; this writes stem/MIDI/CSV artifacts to output_directory.",
+            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."},"include_ml":{"type":"boolean","description":"Run optional pretrained Demucs source separation, drum-stem onset analysis, chord analysis, and Basic Pitch note transcription. Requires the optional Python packages."},"output_directory":{"type":"string","description":"Directory for separated stems, MIDI/CSV note transcriptions, and the ML analysis report. Required when include_ml is true."}},"required":["wav"]}),
         ),
         tool(
             "dragonoff.project_save",
@@ -1462,7 +1462,41 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
         }
         "dragonoff.track_analyze" => {
             let wav = PathBuf::from(string(args, "wav")?);
-            Ok(serde_json::to_value(analysis::analyze_wav(&wav)?).map_err(|e| e.to_string())?)
+            let mut result =
+                serde_json::to_value(analysis::analyze_wav(&wav)?).map_err(|e| e.to_string())?;
+            if args
+                .get("include_ml")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                let output_directory = string(args, "output_directory")?;
+                let python = std::env::var("DRAGONOFF_ANALYSIS_PYTHON")
+                    .or_else(|_| std::env::var("DRAGONOFF_PYTHON"))
+                    .unwrap_or_else(|_| "python3".into());
+                let script =
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/track_analysis_ml.py");
+                let tempo = result["tempo_bpm"].as_f64().unwrap_or(120.0);
+                let process = Command::new(python)
+                    .arg(script)
+                    .arg("--audio")
+                    .arg(&wav)
+                    .arg("--output")
+                    .arg(output_directory)
+                    .arg("--tempo")
+                    .arg(tempo.to_string())
+                    .output()
+                    .map_err(|e| format!("could not start optional ML analysis: {e}"))?;
+                if !process.status.success() {
+                    return Err(format!(
+                        "optional ML analysis failed: {}",
+                        String::from_utf8_lossy(&process.stderr)
+                    ));
+                }
+                let ml: Value = serde_json::from_slice(&process.stdout)
+                    .map_err(|e| format!("optional ML analysis returned invalid JSON: {e}"))?;
+                result["ml_analysis"] = ml;
+            }
+            Ok(result)
         }
         "dragonoff.project_save" => {
             let p = path_for(args, active)?;

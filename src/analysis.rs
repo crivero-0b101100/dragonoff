@@ -18,10 +18,16 @@ pub struct TrackAnalysis {
     pub sample_rate: u32,
     pub tempo_bpm: f64,
     pub tempo_confidence: f64,
+    pub meter: String,
+    pub beat_interval_seconds: f64,
     pub key: String,
     pub key_confidence: f64,
     pub spectral_balance: SpectralBalance,
     pub sections: Vec<EnergySection>,
+    pub bars: Vec<BarAnalysis>,
+    pub chord_progression: Vec<ChordSegment>,
+    pub transient_events: Vec<TransientEvent>,
+    pub sound_character: SoundCharacter,
     pub limitations: &'static str,
 }
 
@@ -38,6 +44,46 @@ pub struct EnergySection {
     pub end_seconds: f64,
     pub rms_dbfs: f64,
     pub relative_energy: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BarAnalysis {
+    pub bar: usize,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub chord: String,
+    pub chord_confidence: f64,
+    pub strongest_pitch_classes: Vec<String>,
+    pub relative_energy: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChordSegment {
+    pub chord: String,
+    pub start_bar: usize,
+    pub end_bar: usize,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransientEvent {
+    pub time_seconds: f64,
+    pub nearest_beat: usize,
+    pub beat_subdivision: String,
+    pub character: String,
+    pub strength: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SoundCharacter {
+    pub description: String,
+    pub notes: Vec<&'static str>,
+}
+
+struct ChromaFrame {
+    time_seconds: f64,
+    values: [f64; 12],
+    energy: f64,
 }
 
 struct Wav {
@@ -59,7 +105,9 @@ pub fn analyze_wav(path: &Path) -> Result<TrackAnalysis, String> {
         .map(|frame| frame.iter().sum::<f64>() / wav.channels as f64)
         .collect();
 
-    let section_len = (wav.sample_rate as usize * 4).max(1);
+    let (tempo_bpm, tempo_confidence) = estimate_tempo(&mono, wav.sample_rate);
+    let beat_interval_seconds = 60.0 / tempo_bpm;
+    let section_len = (wav.sample_rate as f64 * beat_interval_seconds * 16.0).round() as usize;
     let mut sections = Vec::new();
     let mut section_energy = Vec::new();
     for (index, chunk) in mono.chunks(section_len).enumerate() {
@@ -81,10 +129,13 @@ pub fn analyze_wav(path: &Path) -> Result<TrackAnalysis, String> {
         section.relative_energy = (energy / max_energy).sqrt().clamp(0.0, 1.0);
     }
 
-    let (tempo_bpm, tempo_confidence) = estimate_tempo(&mono, wav.sample_rate);
-    let (chroma, band_energy) = spectral_features(&mono, wav.sample_rate);
+    let (chroma, band_energy, chroma_frames) = spectral_features(&mono, wav.sample_rate);
     let (key, key_confidence) = estimate_key(&chroma);
     let total = band_energy.iter().sum::<f64>().max(1e-20);
+    let bars = analyze_bars(&chroma_frames, duration, beat_interval_seconds);
+    let chord_progression = merge_chords(&bars);
+    let transient_events = detect_transients(&mono, wav.sample_rate, beat_interval_seconds);
+    let sound_character = characterize_sound(&band_energy, total, &sections);
 
     Ok(TrackAnalysis {
         source: path.display().to_string(),
@@ -92,6 +143,8 @@ pub fn analyze_wav(path: &Path) -> Result<TrackAnalysis, String> {
         sample_rate: wav.sample_rate,
         tempo_bpm,
         tempo_confidence,
+        meter: "4/4 assumed".into(),
+        beat_interval_seconds,
         key,
         key_confidence,
         spectral_balance: SpectralBalance {
@@ -100,7 +153,11 @@ pub fn analyze_wav(path: &Path) -> Result<TrackAnalysis, String> {
             high_above_4000_hz: band_energy[2] / total,
         },
         sections,
-        limitations: "Tempo, key, and energy sections are signal-based estimates. This tool does not separate stems, transcribe notes/chords, identify instruments, or recover original synth/effect settings.",
+        bars,
+        chord_progression,
+        transient_events,
+        sound_character,
+        limitations: "Bars assume a 4/4 meter and begin on the file start; tempo, chords, key and transient labels are estimates from the mixed audio. Transients are not confirmed drum hits. The built-in pass does not separate stems or transcribe notes. The optional ML pass can provide candidate stems and note events, but cannot recover original instruments, synth patches, or effect settings.",
     })
 }
 
@@ -241,13 +298,14 @@ fn estimate_tempo(samples: &[f64], sample_rate: u32) -> (f64, f64) {
     (bpm.clamp(60.0, 180.0), confidence)
 }
 
-fn spectral_features(samples: &[f64], sample_rate: u32) -> ([f64; 12], [f64; 3]) {
+fn spectral_features(samples: &[f64], sample_rate: u32) -> ([f64; 12], [f64; 3], Vec<ChromaFrame>) {
     const N: usize = 8192;
     let hop = 4096usize;
     let mut chroma = [0.0; 12];
     let mut bands = [0.0; 3];
+    let mut frames = Vec::new();
     if samples.len() < N {
-        return (chroma, bands);
+        return (chroma, bands, frames);
     }
     let mut real = vec![0.0; N];
     let mut imag = vec![0.0; N];
@@ -277,11 +335,254 @@ fn spectral_features(samples: &[f64], sample_rate: u32) -> ([f64; 12], [f64; 3])
             }
         }
         let frame_total = frame_chroma.iter().sum::<f64>().max(1e-20);
+        let mut normalized_chroma = [0.0; 12];
         for pitch_class in 0..12 {
-            chroma[pitch_class] += frame_chroma[pitch_class] / frame_total;
+            normalized_chroma[pitch_class] = frame_chroma[pitch_class] / frame_total;
+            chroma[pitch_class] += normalized_chroma[pitch_class];
+        }
+        frames.push(ChromaFrame {
+            time_seconds: (start + N / 2) as f64 / sample_rate as f64,
+            values: normalized_chroma,
+            energy: frame_chroma.iter().sum(),
+        });
+    }
+    (chroma, bands, frames)
+}
+
+fn analyze_bars(
+    frames: &[ChromaFrame],
+    duration: f64,
+    beat_interval_seconds: f64,
+) -> Vec<BarAnalysis> {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let bar_seconds = beat_interval_seconds * 4.0;
+    let bar_count = (duration / bar_seconds).ceil() as usize;
+    let mut bars = Vec::with_capacity(bar_count);
+    let mut max_energy: f64 = 0.0;
+    let mut aggregate = Vec::with_capacity(bar_count);
+    for bar in 0..bar_count {
+        let start = bar as f64 * bar_seconds;
+        let end = (start + bar_seconds).min(duration);
+        let selected: Vec<&ChromaFrame> = frames
+            .iter()
+            .filter(|frame| frame.time_seconds >= start && frame.time_seconds < end)
+            .collect();
+        let mut chroma = [0.0; 12];
+        let mut energy = 0.0;
+        for frame in &selected {
+            for i in 0..12 {
+                chroma[i] += frame.values[i];
+            }
+            energy += frame.energy;
+        }
+        if !selected.is_empty() {
+            for value in &mut chroma {
+                *value /= selected.len() as f64;
+            }
+            energy /= selected.len() as f64;
+        }
+        max_energy = max_energy.max(energy);
+        let (chord, confidence) = estimate_chord(&chroma);
+        let mut ranked: Vec<(usize, f64)> = chroma.iter().copied().enumerate().collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        aggregate.push((chord, confidence, ranked, energy, start, end));
+    }
+    for (index, (chord, confidence, ranked, energy, start, end)) in
+        aggregate.into_iter().enumerate()
+    {
+        bars.push(BarAnalysis {
+            bar: index + 1,
+            start_seconds: start,
+            end_seconds: end,
+            chord,
+            chord_confidence: confidence,
+            strongest_pitch_classes: ranked
+                .into_iter()
+                .take(3)
+                .map(|(pitch, _)| NAMES[pitch].to_string())
+                .collect(),
+            relative_energy: (energy / max_energy.max(1e-20)).sqrt().clamp(0.0, 1.0),
+        });
+    }
+    bars
+}
+
+fn estimate_chord(chroma: &[f64; 12]) -> (String, f64) {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let total = chroma.iter().sum::<f64>().max(1e-20);
+    let mut candidates = Vec::with_capacity(24);
+    for root in 0..12 {
+        for (quality, third) in [("major", 4usize), ("minor", 3usize)] {
+            let score =
+                (chroma[root] + chroma[(root + third) % 12] + chroma[(root + 7) % 12]) / total;
+            candidates.push((score, root, quality));
         }
     }
-    (chroma, bands)
+    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let best = candidates.first().copied().unwrap_or((0.0, 0, "major"));
+    let runner_up = candidates
+        .get(1)
+        .map(|candidate| candidate.0)
+        .unwrap_or(0.0);
+    let confidence = ((best.0 - runner_up) / best.0.max(1e-20)).clamp(0.0, 1.0);
+    (format!("{} {}", NAMES[best.1], best.2), confidence)
+}
+
+fn merge_chords(bars: &[BarAnalysis]) -> Vec<ChordSegment> {
+    let mut segments: Vec<ChordSegment> = Vec::new();
+    for bar in bars {
+        if let Some(last) = segments.last_mut() {
+            if last.chord == bar.chord {
+                let count = (last.end_bar - last.start_bar + 1) as f64;
+                last.confidence = (last.confidence * count + bar.chord_confidence) / (count + 1.0);
+                last.end_bar = bar.bar;
+                continue;
+            }
+        }
+        segments.push(ChordSegment {
+            chord: bar.chord.clone(),
+            start_bar: bar.bar,
+            end_bar: bar.bar,
+            confidence: bar.chord_confidence,
+        });
+    }
+    segments
+}
+
+fn detect_transients(
+    samples: &[f64],
+    sample_rate: u32,
+    beat_interval_seconds: f64,
+) -> Vec<TransientEvent> {
+    let hop = (sample_rate as usize / 100).max(1);
+    let low_alpha = 1.0 - (-std::f64::consts::TAU * 180.0 / sample_rate as f64).exp();
+    let upper_alpha = 1.0 - (-std::f64::consts::TAU * 4_000.0 / sample_rate as f64).exp();
+    let mut low_state = 0.0;
+    let mut upper_state = 0.0;
+    let mut bands: Vec<[f64; 3]> = Vec::with_capacity(samples.len() / hop + 1);
+    let mut sums = [0.0; 3];
+    let mut count = 0usize;
+    for sample in samples {
+        low_state += low_alpha * (*sample - low_state);
+        upper_state += upper_alpha * (*sample - upper_state);
+        let values = [low_state, upper_state - low_state, *sample - upper_state];
+        for band in 0..3 {
+            sums[band] += values[band] * values[band];
+        }
+        count += 1;
+        if count == hop {
+            bands.push([
+                (sums[0] / count as f64).sqrt(),
+                (sums[1] / count as f64).sqrt(),
+                (sums[2] / count as f64).sqrt(),
+            ]);
+            sums = [0.0; 3];
+            count = 0;
+        }
+    }
+    if count > 0 {
+        bands.push([
+            (sums[0] / count as f64).sqrt(),
+            (sums[1] / count as f64).sqrt(),
+            (sums[2] / count as f64).sqrt(),
+        ]);
+    }
+    let mut novelty = vec![[0.0; 3]; bands.len()];
+    for index in 1..bands.len() {
+        for band in 0..3 {
+            novelty[index][band] = (bands[index][band] - bands[index - 1][band]).max(0.0);
+        }
+    }
+    let mut scales = [0.0; 3];
+    for band in 0..3 {
+        let mut values: Vec<f64> = novelty.iter().map(|frame| frame[band]).collect();
+        values.sort_by(f64::total_cmp);
+        scales[band] = values[(values.len() * 95 / 100).min(values.len() - 1)].max(1e-12);
+    }
+    let mut events = Vec::new();
+    let mut last_event_frame = 0usize;
+    for index in 2..novelty.len().saturating_sub(2) {
+        let normalized = [
+            novelty[index][0] / scales[0],
+            novelty[index][1] / scales[1],
+            novelty[index][2] / scales[2],
+        ];
+        let strength = normalized.iter().copied().fold(0.0, f64::max);
+        let local_max = (index - 2..=index + 2).all(|neighbor| {
+            novelty[index][0] + novelty[index][1] + novelty[index][2]
+                >= novelty[neighbor][0] + novelty[neighbor][1] + novelty[neighbor][2]
+        });
+        if !local_max || strength < 0.45 || index.saturating_sub(last_event_frame) < 8 {
+            continue;
+        }
+        let band = normalized
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(index, _)| index)
+            .unwrap_or(1);
+        let time = index as f64 * hop as f64 / sample_rate as f64;
+        let beat_position = time / beat_interval_seconds;
+        let nearest_beat = beat_position.round() as usize;
+        let fraction = (beat_position - beat_position.floor()).rem_euclid(1.0);
+        let subdivision = match (fraction * 4.0).round() as usize {
+            0 => "beat",
+            1 => "16th offset",
+            2 => "eighth offbeat",
+            _ => "16th offset",
+        };
+        let character = match band {
+            0 => "low transient (kick-like)",
+            1 => "mid transient (snare/percussion-like)",
+            _ => "high transient (hat/cymbal-like)",
+        };
+        events.push(TransientEvent {
+            time_seconds: time,
+            nearest_beat,
+            beat_subdivision: subdivision.into(),
+            character: character.into(),
+            strength: strength.min(1.0),
+        });
+        last_event_frame = index;
+    }
+    events
+}
+
+fn characterize_sound(bands: &[f64; 3], total: f64, sections: &[EnergySection]) -> SoundCharacter {
+    let low = bands[0] / total;
+    let high = bands[2] / total;
+    let descriptor = if low > 0.65 {
+        "Low-frequency energy dominates the measured spectrum."
+    } else if high > 0.12 {
+        "The measured spectrum has relatively strong high-frequency energy."
+    } else {
+        "The measured spectrum is weighted toward low and mid frequencies."
+    };
+    let dynamics = if sections
+        .iter()
+        .map(|section| section.relative_energy)
+        .fold(0.0, f64::max)
+        - sections
+            .iter()
+            .map(|section| section.relative_energy)
+            .fold(1.0, f64::min)
+        > 0.6
+    {
+        "Large energy changes across the arrangement."
+    } else {
+        "Relatively steady energy across the arrangement."
+    };
+    SoundCharacter {
+        description: format!("{descriptor} {dynamics}"),
+        notes: vec![
+            "Spectral balance measures aggregate frequency energy; it is not an EQ curve or instrument detector.",
+            "Transient labels are heuristic frequency bands, not verified drum identities.",
+        ],
+    }
 }
 
 fn fft(real: &mut [f64], imag: &mut [f64]) {
