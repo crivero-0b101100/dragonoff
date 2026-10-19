@@ -204,8 +204,8 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "dragonoff.track_reconstruction_compare",
-            "Compare a synthesized render with its source WAV. Reports tempo, key/chord, bar-energy, spectral-balance, loudness and stereo differences, plus suggested parameter adjustments for an automated refinement pass.",
-            json!({"type":"object","properties":{"reference_wav":{"type":"string","description":"Original source WAV used for track_analyze."},"rendered_wav":{"type":"string","description":"Synthesized WAV exported from the reconstructed Dragonoff project."}},"required":["reference_wav","rendered_wav"]}),
+            "Compare a synthesized render with its source WAV. Optionally pass the source analysis JSON to lock the comparison grid to its tempo. Reports alignment confidence, tempo aliases, confidence-aware harmony, multi-scale energy, spectral balance, loudness and stereo differences.",
+            json!({"type":"object","properties":{"reference_wav":{"type":"string","description":"Original source WAV used for track_analyze."},"rendered_wav":{"type":"string","description":"Synthesized WAV exported from the reconstructed Dragonoff project."},"analysis_json":{"type":"string","description":"Optional source analysis JSON. If it contains a synth reconstruction tempo, that tempo anchors beat and bar comparisons."}},"required":["reference_wav","rendered_wav"]}),
         ),
         tool(
             "dragonoff.track_analyze",
@@ -1546,7 +1546,7 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
                     "timing_reference":ml.pointer("/reconstruction_spec/timing").cloned().unwrap_or_else(|| json!({})),
                     "synth_reconstruction_spec_path":"synth_reconstruction_spec"
                 });
-                result["analysis_schema_version"] = json!("4.2");
+                result["analysis_schema_version"] = json!("4.3");
                 result["synth_reconstruction_spec"] = ml
                     .get("synth_reconstruction_spec")
                     .cloned()
@@ -1606,6 +1606,20 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
                 })
                 .unwrap_or_else(|| "Synth Reconstruction".into());
             let mut song = Song::fresh(title, bpm, key, scale, 48_000, fresh_project_seed());
+            song.analysis_provenance = Some(json!({
+                "analysis_schema_version": analysis.get("analysis_schema_version").cloned().unwrap_or(Value::Null),
+                "input_audio": analysis.get("input_audio").cloned().unwrap_or(Value::Null),
+                "structural_fingerprint": analysis.get("structural_fingerprint").cloned().unwrap_or(Value::Null),
+                "synth_spec_schema_version": spec.get("spec_schema_version").cloned().unwrap_or(Value::Null),
+                "tempo_bpm": bpm,
+                "confidence_and_limits": spec.get("confidence_and_limits").cloned().unwrap_or(Value::Null),
+                "chord_voicing_hypotheses": spec.get("parts")
+                    .and_then(Value::as_array)
+                    .and_then(|parts| parts.iter().find(|part| part.get("id").and_then(Value::as_str) == Some("synth_harmonic_bed")))
+                    .and_then(|part| part.get("voicing_hypotheses"))
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            }));
             if let Some(sections) = spec.get("sections") {
                 song.sections = serde_json::from_value(sections.clone())
                     .map_err(|e| format!("invalid synth spec sections: {e}"))?;
@@ -1712,8 +1726,30 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
         "dragonoff.track_reconstruction_compare" => {
             let reference = PathBuf::from(string(args, "reference_wav")?);
             let rendered = PathBuf::from(string(args, "rendered_wav")?);
-            serde_json::to_value(analysis::compare_wavs(&reference, &rendered)?)
-                .map_err(|e| format!("could not serialize reconstruction comparison: {e}"))
+            let expected_tempo =
+                if let Some(path) = args.get("analysis_json").and_then(Value::as_str) {
+                    let text = fs::read_to_string(path)
+                        .map_err(|e| format!("cannot read comparison analysis JSON: {e}"))?;
+                    let source: Value = serde_json::from_str(&text)
+                        .map_err(|e| format!("invalid comparison analysis JSON: {e}"))?;
+                    source
+                        .pointer("/synth_reconstruction_spec/tempo_bpm")
+                        .and_then(Value::as_f64)
+                        .or_else(|| {
+                            source
+                                .pointer("/beat_grid/tempo_bpm")
+                                .and_then(Value::as_f64)
+                        })
+                        .or_else(|| source.get("tempo_bpm").and_then(Value::as_f64))
+                } else {
+                    None
+                };
+            serde_json::to_value(analysis::compare_wavs_with_grid(
+                &reference,
+                &rendered,
+                expected_tempo,
+            )?)
+            .map_err(|e| format!("could not serialize reconstruction comparison: {e}"))
         }
         "dragonoff.project_save" => {
             let p = path_for(args, active)?;

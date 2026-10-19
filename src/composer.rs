@@ -656,6 +656,7 @@ fn note(bar: u32, beat: f64, pitch: i32, length_beats: f64, velocity: u8) -> Not
         velocity,
         channel: 1,
         synth_overrides: None,
+        analysis_evidence: None,
     }
 }
 

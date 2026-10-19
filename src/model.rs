@@ -27,6 +27,9 @@ pub struct Song {
     pub buses: Vec<MixBus>,
     #[serde(default)]
     pub reverb: ReverbSettings,
+    /// Analysis provenance retained by projects reconstructed from audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_provenance: Option<serde_json::Value>,
 }
 
 fn default_personality() -> String {
@@ -716,6 +719,9 @@ pub struct Note {
     /// Optional event-level synthesis controls for sound-by-sound reconstruction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synth_overrides: Option<NoteSynthOverrides>,
+    /// Source-analysis evidence and uncertainty preserved through reconstruction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_evidence: Option<serde_json::Value>,
 }
 
 /// Per-note controls let transient and bass events vary without splitting a
@@ -890,6 +896,7 @@ impl Song {
             tracks: Vec::new(),
             buses: Vec::new(),
             reverb: ReverbSettings::default(),
+            analysis_provenance: None,
         }
     }
 

@@ -125,6 +125,7 @@ pub fn parse_bulk_notes(
             .map(serde_json::from_value::<NoteSynthOverrides>)
             .transpose()
             .map_err(|error| format!("invalid note synth_overrides: {error}"))?;
+        let analysis_evidence = event.get("analysis_evidence").cloned();
         if let Some(overrides) = &synth_overrides {
             validate_note_synth_overrides(overrides)?;
         }
@@ -158,6 +159,7 @@ pub fn parse_bulk_notes(
             velocity: velocity as u8,
             channel: channel as u8,
             synth_overrides,
+            analysis_evidence,
         });
     }
 

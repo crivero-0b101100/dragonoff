@@ -290,6 +290,7 @@ def drum_hit_observation(audio, sample_rate, time_seconds, band_share, label):
         "pitch_drop_semitones_estimate": pitch_drop,
         "noise_amount_estimate": noise_amount,
         "band_class_margin_uncalibrated": peak_margin,
+        "band_class_confidence_status": "uncalibrated_top_band_share_margin",
         "band_class_shares": {"low": round(band_share[0], 5), "mid": round(band_share[1], 5), "high": round(band_share[2], 5)},
         "synth_control_estimate": controls,
     }
@@ -471,7 +472,7 @@ def _dragonoff_note(start, end, pitch, velocity, tempo, bar_count, metadata=None
         "source_time_seconds": round(float(start), 5),
     }
     if metadata:
-        note["source_observation"] = metadata
+        note["analysis_evidence"] = metadata
     if synth_overrides:
         note["synth_overrides"] = synth_overrides
     return note
@@ -590,6 +591,15 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
                 velocity,
                 tempo,
                 bar_count,
+                metadata={
+                    "evidence_type": "basic_pitch_note_event_and_audio_window_measurements",
+                    "source_time_seconds": event.get("start_seconds"),
+                    "source_end_seconds": event.get("end_seconds"),
+                    "amplitude_estimate_not_confidence": event.get("amplitude_estimate"),
+                    "pitch_bend_estimate": event.get("pitch_bend_offset_semitones_estimate"),
+                    "measurement_status": (event.get("sound_observation") or {}).get("measurement_status"),
+                    "confidence_status": "not_calibrated_by_basic_pitch_export",
+                },
                 synth_overrides=controls,
             )
             if note is not None:
@@ -657,10 +667,14 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             tempo,
             bar_count,
             metadata={
+                "evidence_type": "separated_drum_stem_onset_and_spectral_classification",
+                "source_time_seconds": round(float(start), 5),
+                "class_label": label,
                 "pitch_start_hz_estimate": observation.get("pitch_start_hz_estimate"),
                 "pitch_late_hz_estimate": observation.get("pitch_late_hz_estimate"),
                 "decay_to_20_percent_ms_estimate": observation.get("decay_to_20_percent_ms_estimate"),
                 "band_class_margin_uncalibrated": observation.get("band_class_margin_uncalibrated"),
+                "confidence_status": observation.get("band_class_confidence_status", "uncalibrated"),
             },
             synth_overrides=controls,
         )
@@ -721,6 +735,7 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         )
 
     chord_notes = []
+    chord_voicing_hypotheses = []
     root_map = {name: index for index, name in enumerate(PITCH_NAMES)}
     quality_intervals = {
         "major": [0, 4, 7], "minor": [0, 3, 7], "diminished": [0, 3, 6],
@@ -742,20 +757,31 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             if overlap > 0 and pitch % 12 in chord_classes and 48 <= pitch <= 84:
                 observed[pitch] = max(observed.get(pitch, 0.0), float(event.get("amplitude_estimate", 0.0)))
         observed_pitches = sorted(observed, key=lambda pitch: (pitch % 12 not in chord_classes, -observed[pitch], pitch))
-        if len(observed_pitches) >= 3:
-            pitches = sorted(observed_pitches[:5])
-            voicing_source = "basic_pitch_notes_in_other_stem_filtered_to_chord_tones"
-        else:
-            # Put the estimated chord tones in a compact playable register.
-            pitches = [60 + root + interval for interval in intervals]
-            while max(pitches) > 84:
-                pitches = [pitch - 12 for pitch in pitches]
-            voicing_source = "constructed_chord_tones_no_three_note_voicing_evidence"
+        observed_pitches = sorted(observed_pitches[:5])
+        hypothesis_pitches = [60 + root + interval for interval in intervals]
+        while max(hypothesis_pitches) > 84:
+            hypothesis_pitches = [pitch - 12 for pitch in hypothesis_pitches]
+        chord_voicing_hypotheses.append({
+            "source_chord_event_index": index,
+            "start_seconds": item["start_seconds"],
+            "end_seconds": item["end_seconds"],
+            "chord_candidate": item["chord_candidate"],
+            "confidence_uncalibrated": item.get("confidence"),
+            "top_candidates": item.get("top_candidates", []),
+            "observed_pitches_midi": observed_pitches,
+            "constructed_voicing_hypothesis_midi": hypothesis_pitches,
+            "hypothesis_rendered_by_default": False,
+            "voicing_evidence_status": "observed_basic_pitch_notes" if observed_pitches else "no_observed_chord_tone_notes",
+        })
         start_beat = max(0.0, item["start_seconds"] * tempo / 60.0)
         length_beats = max(0.125, (item["end_seconds"] - item["start_seconds"]) * tempo / 60.0)
         bar = int(start_beat // 4.0) + 1
         beat = (start_beat % 4.0) + 1.0
-        for pitch in pitches:
+        # Only a minimally supported source voicing becomes playable. Smaller
+        # sets remain in voicing_hypotheses instead of being mistaken for a
+        # recovered full chord.
+        supported_pitches = observed_pitches if len(observed_pitches) >= 3 else []
+        for pitch in supported_pitches:
             chord_notes.append(
                 {
                     "bar": bar, "beat": round(beat, 5), "tick": 0, "pitch": pitch,
@@ -763,7 +789,14 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
                     "source_chord_event_index": index,
                     "source_chord_candidate": item["chord_candidate"],
                     "source_chord_confidence_uncalibrated": item["confidence"],
-                    "voicing_evidence": voicing_source,
+                    "analysis_evidence": {
+                        "evidence_type": "observed_basic_pitch_note_overlapping_chord_candidate",
+                        "source_chord_event_index": index,
+                        "source_chord_candidate": item["chord_candidate"],
+                        "confidence_uncalibrated": item.get("confidence"),
+                        "confidence_method": item.get("confidence_method"),
+                        "voicing_evidence_status": "observed_pitch_not_proven_chord_tone",
+                    },
                 }
             )
     parts.append(
@@ -773,6 +806,8 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             "sound": {"waveform": "triangle", "unison": 3, "detune_cents": 7.0, "cutoff_hz": 4_200.0, "attack_ms": 90.0, "decay_ms": 420.0, "sustain": 0.64, "release_ms": 480.0, "stereo_spread": 0.45},
         "estimate_method": "half_beat_chroma_chord_segments_with_stem_note_voicing_evidence_and_explicit_fallback",
             "estimate_status": "sub_bar_chord_candidates_with_uncalibrated_confidence_and_partial_voicing_evidence",
+            "voicing_hypotheses": chord_voicing_hypotheses,
+            "fallback_policy": "constructed chord tones are retained as non-rendered hypotheses; pattern.notes requires at least three overlapping source-observed pitches, which are still not proven chord tones",
             "pattern": {"id": "synth_harmonic_bed_events", "bars": bar_count, "notes": chord_notes},
             "source_note_event_count": len(chord_notes),
         }
@@ -803,7 +838,7 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
         section["energy"] = round(section["energy"] / max_section_energy, 5)
 
     return {
-        "spec_schema_version": "2.1",
+        "spec_schema_version": "2.2",
         "target_renderer": "dragonoff_native_synth",
         "all_parts_source_type": "synth",
         "instrument_identity_required": False,
@@ -833,7 +868,7 @@ def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_re
             "Drum hits carry transient, decay, band-energy, and low-frequency pitch-trajectory measurements; apply each hit's synth_overrides to vary the native synth per hit.",
             "Use note_transcriptions and bar_sound_profiles as the timing and timbre evidence; pattern notes are the Dragonoff beat-grid conversion.",
             "Match mix_targets_by_bar for relative level, spectral balance, and stereo width while rendering.",
-            "The chord part follows half-beat chroma segments; voicings use separated-stem note evidence when at least three chord tones overlap, otherwise generated chord tones are marked as a fallback.",
+            "The chord part follows half-beat chroma segments; it renders only when at least three overlapping source pitches support the candidate. Constructed tones remain non-rendered voicing hypotheses with uncalibrated confidence.",
         ],
         "confidence_and_limits": "Patch values are heuristic initial settings, not recovered original presets. Polyphonic overlap, source separation leakage, and the ambiguity of a mixed recording affect the estimates.",
     }
@@ -1205,6 +1240,9 @@ def build_structural_fingerprint(tempo, key, scale, duration, chord_events, drum
                 "root_semitones_from_tonic": root_interval,
                 "quality": quality or "no_chord",
                 "confidence_uncalibrated": event.get("confidence"),
+                "confidence_method": event.get("confidence_method"),
+                "top_candidates": event.get("top_candidates", []),
+                "voicing_evidence_status": event.get("voicing_evidence_status"),
             }
         )
 
@@ -1338,20 +1376,20 @@ def run(args):
         bar_event_map,
     )
     report = {
-        "analysis_schema_version": "4.2",
+        "analysis_schema_version": "4.3",
         "input_audio": str(audio_path),
         "duration_seconds": round(duration, 4),
         "models": {
             "source_separation": model_name,
             "note_transcription": "Spotify Basic Pitch ICASSP 2022 pretrained model",
             "pitched_synth_control_estimation": "per-note envelope, harmonic, stereo, filter-envelope, and Basic Pitch bend-curve fits for bass, other, and vocals stems",
-            "chord_event_estimation": "half-beat chroma templates with temporal majority smoothing and note-transcription voicing evidence",
+            "chord_event_estimation": "half-beat chroma templates with temporal majority smoothing, ranked candidates, uncalibrated confidence margins, and explicit rendered-versus-hypothesis voicing evidence",
             "structural_fingerprint": "tempo and tonic normalized event topology, harmony, repeated patterns, and bar activity; timbre excluded",
             "drum_synth_control_estimation": "per-hit transient decay and low-frequency pitch-trajectory fit",
             "synth_patch_estimation": "measured event profiles mapped heuristically to supported Dragonoff synth controls",
             "training_performed": False,
         },
-        "limitations": "Source separation can leak sounds between stems. Note events and sound-shape measurements are model estimates and are not manually corrected; amplitude_estimate is not calibrated confidence or MIDI velocity. Per-note synth controls and drum hit roles, pitch sweeps, and envelopes are evidence-based heuristic fits, not recovered original settings. Drum role scores derive from frequency-band energy and are uncalibrated. Bar and half-beat chord labels use uncalibrated template margins; voicing evidence comes from overlapping Basic Pitch notes in the mixed 'other' stem and may include non-chord layers. Fallback chord tones are generated when fewer than three observed chord-tone notes overlap.",
+        "limitations": "Source separation can leak sounds between stems. Note events and sound-shape measurements are model estimates and are not manually corrected; amplitude_estimate is not calibrated confidence or MIDI velocity. Per-note synth controls and drum hit roles, pitch sweeps, and envelopes are evidence-based heuristic fits, not recovered original settings. Drum role scores derive from frequency-band energy and are uncalibrated. Bar and half-beat chord labels use uncalibrated template margins; voicing evidence comes from overlapping Basic Pitch notes in the mixed 'other' stem and may include non-chord layers. Constructed chord voicings are retained as explicitly unrendered hypotheses unless at least three overlapping source pitches support a candidate.",
         "stems": [
             {"stem": name, "audio_path": str(expected_dir / f"{name}.wav")}
             for name in required_stems
