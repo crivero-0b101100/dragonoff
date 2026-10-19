@@ -565,7 +565,7 @@ def _synth_patch_guess(stem, notes):
     }
 
 
-def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_reports, drum_events, chord_events):
+def build_synth_reconstruction_spec(audio, sample_rate, duration, tempo, stem_reports, drum_events, chord_bars, chord_events):
     import numpy as np
 
     bar_count = int(math.ceil(duration * tempo / 240.0))
@@ -1096,6 +1096,150 @@ def build_bar_event_map(chord_bars, drum_events, stem_reports, duration, tempo):
     return output
 
 
+def _accent_class(value, reference):
+    ratio = max(0.0, value) / max(reference, 1e-9)
+    return 1 if ratio < 0.25 else 2 if ratio < 0.5 else 3 if ratio < 0.8 else 4
+
+
+def _repeated_bar_patterns(events_by_bar, limit=12):
+    occurrences = {}
+    for bar, events in events_by_bar.items():
+        signature = json.dumps(events, sort_keys=True, separators=(",", ":"))
+        entry = occurrences.setdefault(signature, {"events": events, "bars": []})
+        entry["bars"].append(int(bar))
+    repeated = [entry for entry in occurrences.values() if len(entry["bars"]) > 1]
+    repeated.sort(key=lambda entry: (-len(entry["bars"]), json.dumps(entry["events"], sort_keys=True)))
+    return [
+        {"occurrences": entry["bars"], "count": len(entry["bars"]), "events": entry["events"]}
+        for entry in repeated[:limit]
+    ]
+
+
+def build_structural_fingerprint(tempo, key, scale, duration, chord_events, drum_events, stem_reports, bar_event_map):
+    """Create a timbre-free, tempo/key-relative musical structure signature."""
+    import numpy as np
+
+    key_pc = PITCH_NAMES.index(key) if key in PITCH_NAMES else 0
+    total_beats = duration * tempo / 60.0
+    bar_count = max(len(bar_event_map), int(math.ceil(total_beats / 4.0)))
+    layer_fingerprints = {}
+    for report in stem_reports:
+        stem = report["stem"]
+        events = report["note_events"]
+        amplitudes = [max(0.0, event.get("amplitude_estimate", 0.0)) for event in events]
+        amplitude_reference = float(np.percentile(amplitudes, 95)) if amplitudes else 1.0
+        by_bar = {}
+        rhythm_by_bar = {}
+        contour_by_bar = {}
+        previous_pitch_by_bar = {}
+        for event in events:
+            start_beat = float(event["start_seconds"]) * tempo / 60.0
+            bar = int(start_beat // 4.0) + 1
+            local_beat = start_beat - (bar - 1) * 4.0
+            pitch = int(event["pitch_midi"])
+            token = {
+                "step_16th": int(round(local_beat * 4.0)) % 16,
+                "length_16ths": max(1, int(round(float(event["timing_on_beat_grid"].get("duration_in_beats_estimate", 0.25)) * 4.0))),
+                "pitch_semitones_from_tonic": (pitch % 12 - key_pc) % 12,
+                "interval_from_previous_note": None if bar not in previous_pitch_by_bar else pitch - previous_pitch_by_bar[bar],
+                "accent_class": _accent_class(float(event.get("amplitude_estimate", 0.0)), amplitude_reference),
+            }
+            previous_pitch_by_bar[bar] = pitch
+            by_bar.setdefault(bar, []).append(token)
+            rhythm_by_bar.setdefault(bar, []).append(
+                {"step_16th": token["step_16th"], "length_16ths": token["length_16ths"]}
+            )
+            contour_by_bar.setdefault(bar, []).append(
+                {"step_16th": token["step_16th"], "interval_from_previous_note": token["interval_from_previous_note"]}
+            )
+        for bar_events in by_bar.values():
+            bar_events.sort(key=lambda item: (item["step_16th"], item["pitch_semitones_from_tonic"], item["length_16ths"]))
+        for pattern in (rhythm_by_bar, contour_by_bar):
+            for bar_events in pattern.values():
+                bar_events.sort(key=lambda item: item["step_16th"])
+        layer_fingerprints[stem] = {
+            "event_count": len(events),
+            "events_by_bar": {str(bar): by_bar.get(bar, []) for bar in range(1, bar_count + 1)},
+            "repeated_bar_patterns": _repeated_bar_patterns(by_bar),
+            "repeated_rhythm_patterns": _repeated_bar_patterns(rhythm_by_bar),
+            "repeated_pitch_contour_patterns": _repeated_bar_patterns(contour_by_bar),
+            "source_events_path": f"note_transcriptions[stem={stem}].note_events",
+        }
+
+    drum_amplitudes = sorted(max(0.0, event.get("onset_strength_relative", 0.0)) for event in drum_events)
+    drum_reference = drum_amplitudes[int((len(drum_amplitudes) - 1) * 0.95)] if drum_amplitudes else 1.0
+    drums_by_bar = {}
+    for event in drum_events:
+        start_beat = float(event["time_seconds"]) * tempo / 60.0
+        bar = int(start_beat // 4.0) + 1
+        local_beat = start_beat - (bar - 1) * 4.0
+        drums_by_bar.setdefault(bar, []).append(
+            {
+                "step_16th": int(round(local_beat * 4.0)) % 16,
+                "role": event.get("character_estimate", "unclassified"),
+                "accent_class": _accent_class(float(event.get("onset_strength_relative", 0.0)), drum_reference),
+            }
+        )
+    for bar_events in drums_by_bar.values():
+        bar_events.sort(key=lambda item: (item["step_16th"], item["role"], item["accent_class"]))
+    drum_rhythm_by_bar = {
+        bar: [{"step_16th": item["step_16th"]} for item in events]
+        for bar, events in drums_by_bar.items()
+    }
+    layer_fingerprints["drums"] = {
+        "event_count": len(drum_events),
+        "events_by_bar": {str(bar): drums_by_bar.get(bar, []) for bar in range(1, bar_count + 1)},
+        "repeated_bar_patterns": _repeated_bar_patterns(drums_by_bar),
+        "repeated_rhythm_patterns": _repeated_bar_patterns(drum_rhythm_by_bar),
+        "source_events_path": "drum_events",
+    }
+
+    harmony = []
+    for event in chord_events:
+        root_name, _, quality = event["chord_candidate"].partition(" ")
+        root_interval = None if root_name == "no_chord" else (PITCH_NAMES.index(root_name) - key_pc) % 12
+        harmony.append(
+            {
+                "start_beat": round(float(event["start_seconds"]) * tempo / 60.0, 3),
+                "duration_beats": round(float(event["duration_beats"]), 3),
+                "root_semitones_from_tonic": root_interval,
+                "quality": quality or "no_chord",
+                "confidence_uncalibrated": event.get("confidence"),
+            }
+        )
+
+    arrangement = []
+    for bar in range(1, bar_count + 1):
+        row = bar_event_map[bar - 1] if bar - 1 < len(bar_event_map) else {}
+        counts = dict(row.get("note_event_count_by_layer", {}))
+        counts["drums"] = len(drums_by_bar.get(bar, []))
+        arrangement.append(
+            {
+                "bar": bar,
+                "active_layers": sorted(layer for layer, count in counts.items() if count > 0),
+                "event_counts_by_layer": counts,
+            }
+        )
+
+    return {
+        "fingerprint_schema_version": "1.0",
+        "purpose": "abstract musical identity and arrangement signature for comparison and reconstruction guidance",
+        "normalization": {
+            "timing": "beat-relative sixteenth-note positions; tempo-independent comparison is supported",
+            "pitch": "semitone relationships relative to the estimated tonic; transposition-independent comparison is supported",
+            "excluded": ["instrument identity", "oscillator waveform", "absolute frequency", "timbre", "effects settings"],
+        },
+        "reference_anchor": {"estimated_tempo_bpm": tempo, "estimated_key": key, "estimated_scale": scale, "meter_assumption": "4/4"},
+        "duration_beats": round(total_beats, 3),
+        "bar_count": bar_count,
+        "harmony": {"events": harmony, "source_events_path": "chords.sub_bar_events"},
+        "layers": layer_fingerprints,
+        "arrangement_by_bar": arrangement,
+        "comparison_guidance": "Compare event timing, relative pitch, chord quality, drum roles, repeated patterns, and layer activity. Keep estimated key and tempo as optional anchors; ignore absolute frequencies and synth patch values.",
+        "confidence_limits": "The signature inherits uncertainty from source separation, note transcription, chord estimation, and drum role classification. It is a structured similarity profile, not a collision-free exact-match hash.",
+    }
+
+
 def run(args):
     # Imports are delayed so missing optional packages produce a direct error.
     from basic_pitch import ICASSP_2022_MODEL_PATH
@@ -1180,10 +1324,21 @@ def run(args):
         args.tempo,
         stem_reports,
         drum_events,
+        chord_bars,
         chord_events,
     )
+    structural_fingerprint = build_structural_fingerprint(
+        args.tempo,
+        synth_reconstruction_spec["key"],
+        synth_reconstruction_spec["scale"],
+        duration,
+        chord_events,
+        drum_events,
+        stem_reports,
+        bar_event_map,
+    )
     report = {
-        "analysis_schema_version": "4.1",
+        "analysis_schema_version": "4.2",
         "input_audio": str(audio_path),
         "duration_seconds": round(duration, 4),
         "models": {
@@ -1191,6 +1346,7 @@ def run(args):
             "note_transcription": "Spotify Basic Pitch ICASSP 2022 pretrained model",
             "pitched_synth_control_estimation": "per-note envelope, harmonic, stereo, filter-envelope, and Basic Pitch bend-curve fits for bass, other, and vocals stems",
             "chord_event_estimation": "half-beat chroma templates with temporal majority smoothing and note-transcription voicing evidence",
+            "structural_fingerprint": "tempo and tonic normalized event topology, harmony, repeated patterns, and bar activity; timbre excluded",
             "drum_synth_control_estimation": "per-hit transient decay and low-frequency pitch-trajectory fit",
             "synth_patch_estimation": "measured event profiles mapped heuristically to supported Dragonoff synth controls",
             "training_performed": False,
@@ -1212,6 +1368,7 @@ def run(args):
         },
         "bar_event_map": bar_event_map,
         "synth_reconstruction_spec": synth_reconstruction_spec,
+        "structural_fingerprint": structural_fingerprint,
         "reconstruction_spec": {
             "intent": "synth-first event-level reconstruction specification from an analyzed mix",
             "consumer_guidance": [
@@ -1228,6 +1385,7 @@ def run(args):
                 "other": "note_transcriptions[stem=other].note_events",
                 "vocals": "note_transcriptions[stem=vocals].note_events",
                 "chord_timeline": "chords.sub_bar_events",
+                "structural_fingerprint": "structural_fingerprint",
                 "synth_parts": "synth_reconstruction_spec.parts",
                 "chords_as_synth_events": "synth_reconstruction_spec.parts[id=synth_harmonic_bed].pattern.notes",
             },
@@ -1239,6 +1397,7 @@ def run(args):
                 "meter_assumption": "4/4",
                 "sixteenth_positions_are_estimates": True,
             },
+            "structural_fingerprint_path": "structural_fingerprint",
         },
         "drum_events": drum_events,
         "note_transcriptions": stem_reports,
