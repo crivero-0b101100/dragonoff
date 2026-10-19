@@ -3,6 +3,7 @@
 
 #![recursion_limit = "256"]
 
+mod analysis;
 mod audio;
 mod composer;
 mod dsp;

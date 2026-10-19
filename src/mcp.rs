@@ -1,6 +1,7 @@
 // Copyright (C) 2026 OpenAI
 // This program is free software under the GNU GPL v2 or (at your option) any later version.
 
+use crate::analysis;
 use crate::audio;
 use crate::midi::parse_bulk_notes;
 use crate::model::{
@@ -200,6 +201,11 @@ fn tool_definitions() -> Vec<Value> {
             "dragonoff.audio_measure",
             "Measure objective WAV signal properties such as loudness, peak, clipping and stereo energy. It does not score musical quality or arrangement choices.",
             json!({"type":"object","properties":{"wav":{"type":"string"}},"required":["wav"]}),
+        ),
+        tool(
+            "dragonoff.track_analyze",
+            "Analyze a finished WAV mix for estimated tempo, key, spectral balance and coarse energy sections. These are signal-based estimates; the tool does not separate stems, transcribe notes, identify instruments, or recover production settings.",
+            json!({"type":"object","properties":{"wav":{"type":"string","description":"Path to a PCM16/24/32 or float32 RIFF/WAVE file."}},"required":["wav"]}),
         ),
         tool(
             "dragonoff.project_save",
@@ -1453,6 +1459,10 @@ fn call_tool(name: &str, args: &Value, active: &mut Option<PathBuf>) -> Result<V
         "dragonoff.audio_measure" => {
             let wav = PathBuf::from(string(args, "wav")?);
             Ok(serde_json::to_value(audio::analyze_wav(&wav)?).map_err(|e| e.to_string())?)
+        }
+        "dragonoff.track_analyze" => {
+            let wav = PathBuf::from(string(args, "wav")?);
+            Ok(serde_json::to_value(analysis::analyze_wav(&wav)?).map_err(|e| e.to_string())?)
         }
         "dragonoff.project_save" => {
             let p = path_for(args, active)?;

@@ -80,6 +80,8 @@ Each render writes `<output>.mix.json`: track/bus/master peak, RMS, crest factor
 
 `dragonoff.audio_measure` reads PCM16/24/32 or float32 stereo exports and reports signal properties such as approximate gated K-weighted loudness, estimated reconstructed peak, clipping and stereo energy. It does not score musical quality, enforce an instrument list, or compare against genre profiles. Musical decisions remain with the producer and should be judged by listening.
 
+`dragonoff.track_analyze` reads a mono or multichannel PCM16/24/32 or float32 RIFF/WAVE file and estimates tempo, major/minor key, low/mid/high spectral balance, and four-second relative-energy sections. It uses built-in signal processing and does not need a trained model, Python, or an audio device. Results are estimates from the final mix: this first-pass analyzer does not separate stems, transcribe notes or chords, identify instruments, or recover the original production settings. Use `dragonoff.pattern_import_json` to add reviewed note events to a project.
+
 ## Validation
 
 ```sh
