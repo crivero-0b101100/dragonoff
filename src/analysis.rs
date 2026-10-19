@@ -198,29 +198,52 @@ fn estimate_tempo(samples: &[f64], sample_rate: u32) -> (f64, f64) {
     }
     let mean = novelty.iter().sum::<f64>() / novelty.len() as f64;
     let centered: Vec<f64> = novelty.iter().map(|x| x - mean).collect();
-    let mut scores = Vec::new();
-    for bpm in 60..=180 {
-        let lag = (6000.0 / bpm as f64).round() as usize;
-        let score = centered
-            .iter()
-            .zip(centered.iter().skip(lag))
-            .map(|(a, b)| a * b)
-            .sum::<f64>()
-            / (centered.len() - lag) as f64;
-        scores.push((score, bpm as f64));
+    let min_lag = 33usize; // about 182 BPM
+    let max_lag = 100usize; // 60 BPM
+    let mut scores = Vec::with_capacity(max_lag - min_lag + 1);
+    for lag in min_lag..=max_lag {
+        let left = &centered[..centered.len() - lag];
+        let right = &centered[lag..];
+        let cross = left.iter().zip(right).map(|(a, b)| a * b).sum::<f64>();
+        let left_energy = left.iter().map(|x| x * x).sum::<f64>();
+        let right_energy = right.iter().map(|x| x * x).sum::<f64>();
+        let correlation = cross / (left_energy * right_energy).sqrt().max(1e-20);
+        scores.push((lag, correlation));
     }
-    scores.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let best = scores.first().copied().unwrap_or((0.0, 120.0));
-    let second = scores.get(1).copied().unwrap_or((0.0, 0.0)).0.max(0.0);
-    (
-        best.1,
-        ((best.0 - second) / best.0.abs().max(1e-20)).clamp(0.0, 1.0),
-    )
+    let best_index = scores
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.1.total_cmp(&b.1.1))
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let (best_lag, peak) = scores[best_index];
+    // Refine the selected autocorrelation peak so an integer 100 Hz frame lag
+    // does not quantize common tempos (for example, 123 BPM to 122 BPM).
+    let fractional_lag = if best_index > 0 && best_index + 1 < scores.len() {
+        let before = scores[best_index - 1].1;
+        let after = scores[best_index + 1].1;
+        let denominator = before - 2.0 * peak + after;
+        if denominator.abs() > 1e-12 {
+            best_lag as f64 + (0.5 * (before - after) / denominator).clamp(-0.5, 0.5)
+        } else {
+            best_lag as f64
+        }
+    } else {
+        best_lag as f64
+    };
+    // Compare with the baseline of the full tempo range, not the adjacent BPM
+    // bin; neighboring tempos share almost the same rounded 100 Hz lag.
+    let mut baseline: Vec<f64> = scores.iter().map(|(_, score)| *score).collect();
+    baseline.sort_by(f64::total_cmp);
+    let median = baseline[baseline.len() / 2].max(0.0);
+    let confidence = ((peak - median) / (1.0 - median).max(1e-20)).clamp(0.0, 1.0);
+    let bpm = 60.0 * 100.0 / fractional_lag;
+    (bpm.clamp(60.0, 180.0), confidence)
 }
 
 fn spectral_features(samples: &[f64], sample_rate: u32) -> ([f64; 12], [f64; 3]) {
-    const N: usize = 4096;
-    let hop = 2048usize;
+    const N: usize = 8192;
+    let hop = 4096usize;
     let mut chroma = [0.0; 12];
     let mut bands = [0.0; 3];
     if samples.len() < N {
@@ -235,6 +258,7 @@ fn spectral_features(samples: &[f64], sample_rate: u32) -> ([f64; 12], [f64; 3])
             imag[i] = 0.0;
         }
         fft(&mut real, &mut imag);
+        let mut frame_chroma = [0.0; 12];
         for bin in 1..N / 2 {
             let hz = bin as f64 * sample_rate as f64 / N as f64;
             let power = real[bin] * real[bin] + imag[bin] * imag[bin];
@@ -247,8 +271,14 @@ fn spectral_features(samples: &[f64], sample_rate: u32) -> ([f64; 12], [f64; 3])
             }
             if (40.0..=5_000.0).contains(&hz) {
                 let midi = 69.0 + 12.0 * (hz / 440.0).log2();
-                chroma[(midi.round() as i32).rem_euclid(12) as usize] += power;
+                // Magnitude weighting and per-frame normalization prevent a
+                // handful of loud bass bins or sections from dominating key.
+                frame_chroma[(midi.round() as i32).rem_euclid(12) as usize] += power.sqrt();
             }
+        }
+        let frame_total = frame_chroma.iter().sum::<f64>().max(1e-20);
+        for pitch_class in 0..12 {
+            chroma[pitch_class] += frame_chroma[pitch_class] / frame_total;
         }
     }
     (chroma, bands)
