@@ -1,0 +1,2042 @@
+{
+  "version": 4,
+  "license": "GPL-2.0-or-later project data; bundled audio assets retain their own licenses",
+  "description": "Editable native instruments. Revision 4 adds per-layer envelopes, filters and pan plus contrasting dark club bass/lead archetypes. Each preset remains agent-editable; no style is inferred during rendering.",
+  "limits": {
+    "layers_per_track": 8,
+    "unison_voices_per_layer": 8,
+    "total_unison_voices_per_track": 32
+  },
+  "sources": [
+    {
+      "id": "sine",
+      "kind": "oscillator",
+      "description": "Clean fundamental with no intentional upper harmonics."
+    },
+    {
+      "id": "saw",
+      "kind": "oscillator",
+      "description": "Bright harmonic source with PolyBLEP edge correction."
+    },
+    {
+      "id": "square",
+      "kind": "oscillator",
+      "description": "Odd harmonic source; pulse width changes its balance and tone."
+    },
+    {
+      "id": "triangle",
+      "kind": "oscillator",
+      "description": "Pitch-selected bandlimited odd-harmonic triangle wavetable."
+    },
+    {
+      "id": "choir",
+      "kind": "oscillator",
+      "description": "Band-limited formant-like harmonic wavetable with pitch-selected mip levels; synthetic, not a recorded choir."
+    },
+    {
+      "id": "brass",
+      "kind": "oscillator",
+      "description": "Band-limited bright harmonic wavetable with pitch-selected mip levels; synthetic, not a sampled brass instrument."
+    },
+    {
+      "id": "fm",
+      "kind": "oscillator",
+      "description": "True two-operator phase modulation with per-layer ratio, index amount and index decay; significant sidebands bounded against Nyquist."
+    },
+    {
+      "id": "noise",
+      "kind": "oscillator",
+      "description": "Deterministic, bipolar, zero-mean white noise; revision 2 repairs the formerly biased low-amplitude generator."
+    },
+    {
+      "id": "sampled_piano",
+      "kind": "sampled_instrument",
+      "description": "CC0 piano multisample with two velocity layers and eight note zones."
+    },
+    {
+      "id": "sampled_flute",
+      "kind": "sampled_instrument",
+      "description": "CC0 flute multisample with ten note zones; sustained line and counter-melody use."
+    },
+    {
+      "id": "sampled_nylon_guitar",
+      "kind": "sampled_instrument",
+      "description": "CC0 nylon guitar with ten note zones and three velocity-selected playing colors: fingerstyle, light pick, firm pick."
+    }
+  ],
+  "sampled_instruments": [
+    {
+      "id": "piano",
+      "role": "piano",
+      "source": "Meta Piano CC0",
+      "zones": 8,
+      "velocity_layers": 2,
+      "character": "warm upright piano; sampled attacks and natural decay",
+      "steering": "Use as a hook, chord arpeggio, or breakdown foreground."
+    },
+    {
+      "id": "flute",
+      "role": "flute",
+      "source": "VSCO/Community Edition CC0 flute",
+      "zones": 10,
+      "velocity_layers": 1,
+      "character": "breathy sustained wind with recorded vibrato",
+      "steering": "Use for a countermelody or a phrase answer; leave space around held notes."
+    },
+    {
+      "id": "nylon_guitar",
+      "role": "guitar",
+      "source": "Meta Nylon Guitar CC0 OGG previews",
+      "zones": 10,
+      "velocity_layers": 3,
+      "character": "intimate plucked attacks with fingerstyle and two picked dynamics",
+      "steering": "Use for broken chords, rhythmic ostinatos, and contrasting breakdown motifs."
+    },
+    {
+      "id": "steel_guitar",
+      "role": "steel_guitar",
+      "source": "Meta Steel Guitar CC0",
+      "zones": 9,
+      "velocity_layers": 2,
+      "character": "bright, detailed steel-string pluck with distinct sampled attacks and dynamic layers",
+      "steering": "Use for a short rhythmic pulse or sparse answering motif; filter and saturate for a darker electronic role, and keep away from the sub/bass register."
+    }
+  ],
+  "filter_modes": [
+    {
+      "id": "lowpass",
+      "description": "Keeps fundamentals and low harmonics; darkens the source above cutoff."
+    },
+    {
+      "id": "highpass",
+      "description": "Removes low frequencies; useful for bright layers and transition noise."
+    },
+    {
+      "id": "bandpass",
+      "description": "Keeps a band around cutoff; resonance emphasizes a moving spectral focus."
+    },
+    {
+      "id": "notch",
+      "description": "Rejects a band around cutoff while retaining low and high content."
+    },
+    {
+      "id": "allpass",
+      "description": "Changes phase around cutoff without selecting a frequency band; useful for phase color."
+    }
+  ],
+  "patch_controls": {
+    "layer_budget": "1-8 layers, maximum 32 unison voices total per track",
+    "waveforms": [
+      "sine",
+      "saw",
+      "square",
+      "triangle",
+      "choir",
+      "brass",
+      "fm",
+      "noise"
+    ],
+    "layer_octave": "-3..3",
+    "layer_gain": "0..2 linear",
+    "layer_detune_cents": "0..50",
+    "layer_unison": "1..8",
+    "pulse_width": "0.05..0.95 for square",
+    "fm_amount": "0..1",
+    "noise_amount": "0..1",
+    "amp_envelope": {
+      "attack_ms": "0..5000",
+      "decay_ms": "0..10000",
+      "sustain": "0..1",
+      "release_ms": "0..10000"
+    },
+    "filter": {
+      "mode": "see filter_modes",
+      "cutoff_hz": "20..40000",
+      "resonance": "0..0.95",
+      "envelope_amount_octaves": "-4..4",
+      "envelope_decay_ms": "1..10000"
+    },
+    "lfo": {
+      "rate_hz": "0..30",
+      "target": [
+        "cutoff",
+        "amplitude"
+      ],
+      "depth": "0..4 octaves for cutoff; amplitude depth clamps to 0..1"
+    },
+    "output_gain_db": "-36..18 dB explicit instrument trim",
+    "stereo_spread": "0..1 unison pan spread",
+    "phase_reset": "boolean",
+    "pitch_envelope_semitones": "-24..48",
+    "pitch_decay_ms": "1..5000",
+    "fm_ratio": "0.25..12 per layer",
+    "fm_decay_ms": "0..10000 per layer; zero sustains index",
+    "pulse_width_depth": "0..0.4 per layer",
+    "pulse_width_rate_hz": "0..20 per layer",
+    "tune_semitones": "-24..24 per layer"
+  },
+  "effect_controls": [
+    {
+      "id": "drum_voice",
+      "controls": {
+        "sample_start_ms": "0..500",
+        "decay_ms": "0..5000; zero keeps the source length",
+        "transient": "0..2",
+        "noise_mix": "0..1"
+      },
+      "description": "Per-hit sample start, end length, transient emphasis, and short noise layer. Drum MIDI patterns give each hit an independent position and velocity."
+    },
+    {
+      "id": "saturation",
+      "modes": [
+        "soft_clip",
+        "hard_clip",
+        "foldback"
+      ],
+      "range": "0..1",
+      "description": "Gain-compensated saturation; soft_clip uses antiderivative antialiasing. Hard/foldback are deliberate unfiltered distortion colors."
+    },
+    {
+      "id": "delay",
+      "controls": {
+        "delay_ms": "0..1200",
+        "delay_beats": "0.125..2",
+        "feedback": "0..0.85",
+        "wet": "0..0.8"
+      },
+      "description": "Echo time can be free or tempo-synced; feedback and wet are independently adjustable."
+    },
+    {
+      "id": "reverb_send",
+      "range": "0..0.8",
+      "description": "Shared, damped diffuse stereo room with MCP-editable decay, pre-delay, filters and return gain."
+    },
+    {
+      "id": "chorus",
+      "controls": {
+        "depth": "0..1",
+        "rate_hz": "0.02..8"
+      },
+      "description": "Modulated short delay creates stereo motion; rate and depth can be changed independently."
+    },
+    {
+      "id": "compressor",
+      "controls": {
+        "threshold_db": "-60..0",
+        "ratio": "1..20",
+        "attack_ms": "0.1..100",
+        "release_ms": "5..2000",
+        "knee_db": "0..24",
+        "makeup_db": "-24..24",
+        "detector_highpass_hz": "0..1000"
+      },
+      "description": "Stereo-linked RMS detection with soft knee, explicit makeup and detector highpass."
+    },
+    {
+      "id": "kick_sidechain",
+      "controls": {
+        "source": "sidechain_source track ID",
+        "threshold_db": "-60..0",
+        "amount": "0..0.95",
+        "release_ms": "5..2000"
+      },
+      "description": "Actual audio-triggered ducking from a named source track; no phantom pumping during kick-free passages."
+    },
+    {
+      "id": "parametric_dynamic_eq",
+      "description": "Up to 12 independent bands per track, bus or master. Double precision RBJ coefficients; linked band detector for dynamic bell cuts.",
+      "controls": {
+        "kinds": [
+          "bell",
+          "low_shelf",
+          "high_shelf",
+          "notch",
+          "highpass",
+          "lowpass"
+        ],
+        "frequency_hz": "10..40000",
+        "gain_db": "-24..24",
+        "q": "0.1..16",
+        "dynamic_threshold_db": "-72..0 or null",
+        "dynamic_ratio": "1..12",
+        "dynamic_range_db": "0..12",
+        "attack_ms": "0.1..200",
+        "release_ms": "5..2000"
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "sub_clean",
+      "name": "Clean Sine Sub",
+      "family": "bass",
+      "description": "A centered fundamental-only sub at the requested MIDI pitch. Revision 2 removes the former hidden extra octave drop.",
+      "register": "MIDI 28-48",
+      "use": "Long or short root notes; keep it mono-compatible and let the kick own the transient.",
+      "sound": {
+        "waveform": "sine",
+        "cutoff_hz": 140,
+        "attack_ms": 2,
+        "decay_ms": 90,
+        "sustain": 0.82,
+        "release_ms": 90,
+        "filter_mode": "lowpass",
+        "layers": [
+          {
+            "waveform": "sine",
+            "octave": 0,
+            "gain": 0.82
+          }
+        ]
+      }
+    },
+    {
+      "id": "rolling_pulse_bass",
+      "name": "Rolling Pulse Bass",
+      "family": "bass",
+      "description": "A firm saw body with a restrained sub octave and a quick filter movement.",
+      "register": "MIDI 38-58",
+      "use": "Sixteenth or eighth-note groove; shorten release when notes crowd the kick.",
+      "sound": {
+        "cutoff_hz": 720,
+        "attack_ms": 2,
+        "decay_ms": 130,
+        "sustain": 0.54,
+        "release_ms": 75,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.16,
+        "filter_env_amount": 1.1,
+        "filter_decay_ms": 180,
+        "layers": [
+          {
+            "waveform": "saw",
+            "octave": 0,
+            "gain": 0.72,
+            "unison": 1
+          },
+          {
+            "waveform": "sine",
+            "octave": -1,
+            "gain": 0.2,
+            "unison": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "pipe_bass",
+      "name": "Hollow Pipe Bass",
+      "family": "bass",
+      "description": "A rounded triangle tone with a small nasal upper harmonic layer.",
+      "register": "MIDI 40-60",
+      "use": "Sparse offbeat answers and short accents; avoid doubling every sub note.",
+      "sound": {
+        "cutoff_hz": 1100,
+        "attack_ms": 4,
+        "decay_ms": 180,
+        "sustain": 0.48,
+        "release_ms": 95,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.22,
+        "layers": [
+          {
+            "waveform": "triangle",
+            "octave": 0,
+            "gain": 0.68
+          },
+          {
+            "waveform": "brass",
+            "octave": 1,
+            "gain": 0.14
+          }
+        ]
+      }
+    },
+    {
+      "id": "brass_cadence",
+      "name": "Brass Cadence Accent",
+      "family": "bass",
+      "description": "A bright brass-like synthetic accent with a falling filter envelope.",
+      "register": "MIDI 43-64",
+      "use": "Cadence hits and fills, with velocity variation and gaps between phrases.",
+      "sound": {
+        "cutoff_hz": 1800,
+        "attack_ms": 3,
+        "decay_ms": 210,
+        "sustain": 0.32,
+        "release_ms": 130,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.2,
+        "filter_env_amount": 1.6,
+        "filter_decay_ms": 160,
+        "layers": [
+          {
+            "waveform": "brass",
+            "gain": 0.55,
+            "unison": 2,
+            "detune_cents": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "fm_bass_edge",
+      "name": "FM Bass Edge",
+      "family": "bass",
+      "description": "A sine fundamental with inharmonic FM bite and a controlled upper layer.",
+      "register": "MIDI 42-64",
+      "use": "Use in short phrases or as a transient character layer above a sub.",
+      "sound": {
+        "cutoff_hz": 4200,
+        "attack_ms": 1,
+        "decay_ms": 120,
+        "sustain": 0.3,
+        "release_ms": 65,
+        "filter_mode": "lowpass",
+        "layers": [
+          {
+            "waveform": "fm",
+            "gain": 0.65,
+            "fm_amount": 0.58
+          },
+          {
+            "waveform": "sine",
+            "octave": -1,
+            "gain": 0.22
+          }
+        ]
+      }
+    },
+    {
+      "id": "analog_chord_stab",
+      "name": "Analog Chord Stab",
+      "family": "chords",
+      "description": "A short, harmonically rich saw chord with a filter snap and measured width from unison.",
+      "register": "MIDI 52-76",
+      "use": "Syncopated chord hits; choose inversions to keep each voice moving smoothly.",
+      "sound": {
+        "cutoff_hz": 2600,
+        "attack_ms": 4,
+        "decay_ms": 280,
+        "sustain": 0.24,
+        "release_ms": 160,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.18,
+        "filter_env_amount": 1.4,
+        "filter_decay_ms": 210,
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.62,
+            "unison": 3,
+            "detune_cents": 6
+          },
+          {
+            "waveform": "triangle",
+            "octave": -1,
+            "gain": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "id": "open_minor_chord",
+      "name": "Open Minor Chord Bed",
+      "family": "chords",
+      "description": "A mellow two-layer chord body designed to leave space for a lead.",
+      "register": "MIDI 48-74",
+      "use": "Sustain through breakdowns; reduce reverb or remove upper chord tones in dense drops.",
+      "sound": {
+        "cutoff_hz": 1700,
+        "attack_ms": 70,
+        "decay_ms": 380,
+        "sustain": 0.64,
+        "release_ms": 520,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.08,
+        "lfo_rate_hz": 0.11,
+        "lfo_depth": 0.22,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.48,
+            "unison": 2,
+            "detune_cents": 5
+          },
+          {
+            "waveform": "triangle",
+            "octave": 1,
+            "gain": 0.16
+          }
+        ]
+      }
+    },
+    {
+      "id": "mono_anthem_lead",
+      "name": "Mono Anthem Lead",
+      "family": "lead",
+      "description": "A focused saw lead with a soft sine body and a restrained cutoff LFO.",
+      "register": "MIDI 60-88",
+      "use": "Main motif; keep one central layer prominent and let delay create the tail.",
+      "sound": {
+        "cutoff_hz": 4100,
+        "attack_ms": 9,
+        "decay_ms": 250,
+        "sustain": 0.68,
+        "release_ms": 220,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.12,
+        "lfo_rate_hz": 0.18,
+        "lfo_depth": 0.12,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.68,
+            "unison": 2,
+            "detune_cents": 4
+          },
+          {
+            "waveform": "sine",
+            "octave": -1,
+            "gain": 0.18
+          }
+        ]
+      }
+    },
+    {
+      "id": "formant_vocal_lead",
+      "name": "Formant Vocal Lead",
+      "family": "lead",
+      "description": "A synthetic choir spectrum layered with a vowel-like brass formant color; not a vocal recording.",
+      "register": "MIDI 58-84",
+      "use": "Emotional hook phrases; reduce chord density around its held notes.",
+      "sound": {
+        "cutoff_hz": 3200,
+        "attack_ms": 35,
+        "decay_ms": 300,
+        "sustain": 0.72,
+        "release_ms": 380,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.14,
+        "lfo_rate_hz": 0.08,
+        "lfo_depth": 0.2,
+        "layers": [
+          {
+            "waveform": "choir",
+            "gain": 0.62,
+            "unison": 2,
+            "detune_cents": 3
+          },
+          {
+            "waveform": "brass",
+            "octave": 1,
+            "gain": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "id": "bright_supersaw",
+      "name": "Bright Supersaw",
+      "family": "lead",
+      "description": "A dense, wide-feeling saw stack with a narrow center layer and modest detune.",
+      "register": "MIDI 62-90",
+      "use": "Peak phrases only; lower the layer gain or unison if it masks the vocal or piano hook.",
+      "sound": {
+        "cutoff_hz": 5900,
+        "attack_ms": 12,
+        "decay_ms": 280,
+        "sustain": 0.7,
+        "release_ms": 260,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.58,
+            "unison": 5,
+            "detune_cents": 8
+          },
+          {
+            "waveform": "saw",
+            "octave": 1,
+            "gain": 0.12,
+            "unison": 2,
+            "detune_cents": 5
+          }
+        ]
+      }
+    },
+    {
+      "id": "glass_fm_bell",
+      "name": "Glass FM Bell",
+      "family": "lead",
+      "description": "A bright, inharmonic sine-FM strike with a long decaying tail.",
+      "register": "MIDI 67-96",
+      "use": "Sparse motif punctuation, phrase endings, and high-register answers.",
+      "sound": {
+        "cutoff_hz": 11000,
+        "attack_ms": 1,
+        "decay_ms": 1200,
+        "sustain": 0.02,
+        "release_ms": 950,
+        "filter_mode": "highpass",
+        "layers": [
+          {
+            "waveform": "fm",
+            "gain": 0.68,
+            "octave": 0,
+            "fm_amount": 0.78
+          },
+          {
+            "waveform": "sine",
+            "octave": 1,
+            "gain": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "id": "pluck_ostinato",
+      "name": "Muted Pluck Ostinato",
+      "family": "arp",
+      "description": "A fast-decay pulse and saw combination for a precise repeating figure.",
+      "register": "MIDI 60-84",
+      "use": "Short rhythmic figures; automate delay send at phrase ends instead of leaving every repeat wet.",
+      "sound": {
+        "cutoff_hz": 2800,
+        "attack_ms": 1,
+        "decay_ms": 100,
+        "sustain": 0.08,
+        "release_ms": 70,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.24,
+        "filter_env_amount": 1.5,
+        "filter_decay_ms": 90,
+        "layers": [
+          {
+            "waveform": "square",
+            "gain": 0.42,
+            "pulse_width": 0.34
+          },
+          {
+            "waveform": "saw",
+            "octave": 1,
+            "gain": 0.18
+          }
+        ]
+      }
+    },
+    {
+      "id": "clockwork_arp",
+      "name": "Clockwork Arpeggio",
+      "family": "arp",
+      "description": "A clean square-driven pulse with a small sine fundamental, optimized for repeated notes.",
+      "register": "MIDI 64-88",
+      "use": "Use rests and octave changes to make motion; avoid filling every sixteenth note.",
+      "sound": {
+        "cutoff_hz": 4600,
+        "attack_ms": 1,
+        "decay_ms": 90,
+        "sustain": 0.24,
+        "release_ms": 55,
+        "filter_mode": "lowpass",
+        "layers": [
+          {
+            "waveform": "square",
+            "gain": 0.4,
+            "pulse_width": 0.5
+          },
+          {
+            "waveform": "sine",
+            "octave": -1,
+            "gain": 0.24
+          }
+        ]
+      }
+    },
+    {
+      "id": "slow_string_pad",
+      "name": "Slow String Synth",
+      "family": "pad",
+      "description": "A slow-attack saw/triangle blend with restrained unison for an emotional sustained bed.",
+      "register": "MIDI 48-76",
+      "use": "Breakdowns and theme support; high-pass or lower the gain when the bass returns.",
+      "sound": {
+        "cutoff_hz": 2400,
+        "attack_ms": 180,
+        "decay_ms": 500,
+        "sustain": 0.72,
+        "release_ms": 780,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.08,
+        "lfo_rate_hz": 0.14,
+        "lfo_depth": 0.18,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.42,
+            "unison": 3,
+            "detune_cents": 7
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.28
+          }
+        ]
+      }
+    },
+    {
+      "id": "choir_shimmer",
+      "name": "Choir Shimmer",
+      "family": "pad",
+      "description": "A synthetic formant bed with a quiet octave shimmer and long release.",
+      "register": "MIDI 53-81",
+      "use": "Use as a background color under a clear lead; automate it out before dense transitions.",
+      "sound": {
+        "cutoff_hz": 5200,
+        "attack_ms": 260,
+        "decay_ms": 650,
+        "sustain": 0.58,
+        "release_ms": 1100,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.1,
+        "lfo_rate_hz": 0.07,
+        "lfo_depth": 0.15,
+        "layers": [
+          {
+            "waveform": "choir",
+            "gain": 0.48,
+            "unison": 2,
+            "detune_cents": 4
+          },
+          {
+            "waveform": "sine",
+            "octave": 1,
+            "gain": 0.14
+          }
+        ]
+      }
+    },
+    {
+      "id": "organ_pulse",
+      "name": "Organ Pulse",
+      "family": "keys",
+      "description": "A stable triangle and square blend with little detune, giving chords a defined attack.",
+      "register": "MIDI 48-79",
+      "use": "Repeated chord rhythm and harmonic support; shorten gates to keep the groove articulate.",
+      "sound": {
+        "cutoff_hz": 5200,
+        "attack_ms": 3,
+        "decay_ms": 120,
+        "sustain": 0.78,
+        "release_ms": 110,
+        "filter_mode": "lowpass",
+        "layers": [
+          {
+            "waveform": "triangle",
+            "gain": 0.56
+          },
+          {
+            "waveform": "square",
+            "octave": 1,
+            "gain": 0.16,
+            "pulse_width": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "id": "dark_resonant_drone",
+      "name": "Dark Resonant Drone",
+      "family": "texture",
+      "description": "A low saw source under a resonant band-pass with slow cutoff modulation.",
+      "register": "MIDI 40-62",
+      "use": "Long transitions or breakdown tension; keep it quiet and remove low frequencies in the mix.",
+      "sound": {
+        "cutoff_hz": 720,
+        "attack_ms": 500,
+        "decay_ms": 900,
+        "sustain": 0.7,
+        "release_ms": 1200,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.54,
+        "lfo_rate_hz": 0.035,
+        "lfo_depth": 1.1,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.48
+          },
+          {
+            "waveform": "noise",
+            "octave": 1,
+            "gain": 0.08
+          }
+        ]
+      }
+    },
+    {
+      "id": "transition_noise",
+      "name": "Filtered Noise Lift",
+      "family": "texture",
+      "description": "A noise source with an upward filter envelope; shape it with automation and a short final fade.",
+      "register": "broadband",
+      "use": "Builds and transitions only; mute it after the impact so the drop has contrast.",
+      "sound": {
+        "cutoff_hz": 8000,
+        "attack_ms": 350,
+        "decay_ms": 1100,
+        "sustain": 0.28,
+        "release_ms": 260,
+        "filter_mode": "highpass",
+        "filter_env_amount": 1.8,
+        "filter_decay_ms": 950,
+        "layers": [
+          {
+            "waveform": "noise",
+            "gain": 0.4
+          },
+          {
+            "waveform": "sine",
+            "octave": 1,
+            "gain": 0.05
+          }
+        ]
+      }
+    },
+    {
+      "id": "voidglass_lead",
+      "name": "Voidglass Formant Lead",
+      "family": "dark_lead",
+      "description": "A dark, moving lead that combines hollow choir formants, a metallic FM overtone, and a low saw body. Its slow band-pass motion keeps sustained notes evolving.",
+      "register": "MIDI 60-88",
+      "use": "Use for the main emotional hook; give it long notes and leave chord stabs out of its register.",
+      "sound": {
+        "waveform": "choir",
+        "cutoff_hz": 1850,
+        "attack_ms": 42,
+        "decay_ms": 640,
+        "sustain": 0.74,
+        "release_ms": 720,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.32,
+        "filter_env_amount": 0.38,
+        "filter_decay_ms": 1250,
+        "lfo_rate_hz": 0.075,
+        "lfo_depth": 0.42,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "choir",
+            "gain": 0.58,
+            "unison": 2,
+            "detune_cents": 5
+          },
+          {
+            "waveform": "fm",
+            "octave": 1,
+            "gain": 0.22,
+            "unison": 1,
+            "fm_amount": 0.48
+          },
+          {
+            "waveform": "saw",
+            "octave": -1,
+            "gain": 0.19,
+            "unison": 1,
+            "detune_cents": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "shard_fm_hook",
+      "name": "Shattered Glass FM Hook",
+      "family": "dark_lead",
+      "description": "A brittle, inharmonic FM voice with a soft triangle center and long release; designed for sparse answers and phrase endings.",
+      "register": "MIDI 65-94",
+      "use": "Use as a secondary hook or occasional high answer, not as a constant fast arp.",
+      "sound": {
+        "waveform": "fm",
+        "cutoff_hz": 7800,
+        "attack_ms": 3,
+        "decay_ms": 520,
+        "sustain": 0.18,
+        "release_ms": 940,
+        "filter_mode": "highpass",
+        "filter_resonance": 0.18,
+        "filter_env_amount": 0.85,
+        "filter_decay_ms": 420,
+        "lfo_rate_hz": 0.22,
+        "lfo_depth": 0.08,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "fm",
+            "gain": 0.57,
+            "fm_amount": 0.88
+          },
+          {
+            "waveform": "triangle",
+            "octave": -1,
+            "gain": 0.22
+          },
+          {
+            "waveform": "sine",
+            "octave": 1,
+            "gain": 0.12,
+            "fm_amount": 0.18
+          }
+        ]
+      }
+    },
+    {
+      "id": "black_reese_motor",
+      "name": "Blackened Reese Motor",
+      "family": "dark_bass",
+      "description": "A textured mid-bass with a narrow detuned saw pair, sine foundation, and slow resonant filter drift. The sub layer stays distinct and centered in the mix.",
+      "register": "MIDI 34-58",
+      "use": "Use for syncopated mid-bass movement above a separate sine sub; sidechain and high-pass it.",
+      "sound": {
+        "waveform": "saw",
+        "cutoff_hz": 920,
+        "attack_ms": 5,
+        "decay_ms": 260,
+        "sustain": 0.62,
+        "release_ms": 150,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.29,
+        "filter_env_amount": 0.54,
+        "filter_decay_ms": 620,
+        "lfo_rate_hz": 0.11,
+        "lfo_depth": 0.24,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.52,
+            "unison": 2,
+            "detune_cents": 13
+          },
+          {
+            "waveform": "square",
+            "octave": -1,
+            "gain": 0.19,
+            "unison": 1,
+            "pulse_width": 0.37
+          },
+          {
+            "waveform": "sine",
+            "octave": -1,
+            "gain": 0.38
+          },
+          {
+            "waveform": "fm",
+            "octave": 1,
+            "gain": 0.08,
+            "fm_amount": 0.3
+          }
+        ]
+      }
+    },
+    {
+      "id": "granite_mid_bass",
+      "name": "Granite Impact Bass",
+      "family": "dark_bass",
+      "description": "A compact, distorted brass/FM accent with a hard transient and a clipped spectral tail; deliberately unlike the sustained Reese layer.",
+      "register": "MIDI 40-66",
+      "use": "Place sparsely at phrase ends and drop accents, leaving the main bass rhythm clear.",
+      "sound": {
+        "waveform": "brass",
+        "cutoff_hz": 1420,
+        "attack_ms": 1,
+        "decay_ms": 145,
+        "sustain": 0.22,
+        "release_ms": 95,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.22,
+        "filter_env_amount": 1.22,
+        "filter_decay_ms": 115,
+        "layers": [
+          {
+            "waveform": "brass",
+            "gain": 0.48,
+            "unison": 1
+          },
+          {
+            "waveform": "fm",
+            "octave": 1,
+            "gain": 0.24,
+            "fm_amount": 0.64
+          },
+          {
+            "waveform": "sine",
+            "octave": -1,
+            "gain": 0.14
+          }
+        ]
+      }
+    },
+    {
+      "id": "rusted_orbit",
+      "name": "Rusted Orbit Pulse",
+      "family": "dark_arp",
+      "description": "A hollow, metallic pulse with a pulse-width square, FM upper partial, and band-pass resonance. It has a clear attack but a rounded tail.",
+      "register": "MIDI 60-88",
+      "use": "Use selective eighth-note or quarter-note figures with rests; let delay answer the phrase.",
+      "sound": {
+        "waveform": "square",
+        "cutoff_hz": 3350,
+        "attack_ms": 4,
+        "decay_ms": 310,
+        "sustain": 0.3,
+        "release_ms": 260,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.34,
+        "filter_env_amount": 0.72,
+        "filter_decay_ms": 250,
+        "lfo_rate_hz": 0.16,
+        "lfo_depth": 0.16,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "square",
+            "gain": 0.44,
+            "pulse_width": 0.31
+          },
+          {
+            "waveform": "fm",
+            "octave": 1,
+            "gain": 0.2,
+            "fm_amount": 0.6
+          },
+          {
+            "waveform": "triangle",
+            "octave": -1,
+            "gain": 0.16
+          }
+        ]
+      }
+    },
+    {
+      "id": "cathedral_static",
+      "name": "Cathedral Static Bed",
+      "family": "dark_pad",
+      "description": "A wide-feeling, slowly breathing pad with choir formants, bowed-saw body, and a grain of filtered noise for dark air.",
+      "register": "MIDI 48-78",
+      "use": "Hold through the breakdown; automate its level and filter into the return instead of leaving it full-time.",
+      "sound": {
+        "waveform": "choir",
+        "cutoff_hz": 2700,
+        "attack_ms": 410,
+        "decay_ms": 820,
+        "sustain": 0.63,
+        "release_ms": 1450,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.17,
+        "filter_env_amount": 0.12,
+        "filter_decay_ms": 2200,
+        "lfo_rate_hz": 0.047,
+        "lfo_depth": 0.27,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "choir",
+            "gain": 0.43,
+            "unison": 3,
+            "detune_cents": 8
+          },
+          {
+            "waveform": "saw",
+            "octave": -1,
+            "gain": 0.24,
+            "unison": 2,
+            "detune_cents": 4
+          },
+          {
+            "waveform": "noise",
+            "octave": 1,
+            "gain": 0.035,
+            "noise_amount": 0.08
+          },
+          {
+            "waveform": "sine",
+            "octave": 1,
+            "gain": 0.1
+          }
+        ]
+      }
+    },
+    {
+      "id": "v2_piston_kick",
+      "name": "Piston — tuned kick body",
+      "family": "drums",
+      "description": "Phase-reset sine with a fast downward pitch envelope; the kick fundamental is explicit and editable.",
+      "register": "MIDI 28–34",
+      "use": "Four quarter-note hits. Layer one quiet high-passed click on its own track.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 8,
+        "stereo_spread": 0,
+        "phase_reset": true,
+        "pitch_envelope_semitones": 28,
+        "pitch_decay_ms": 18,
+        "cutoff_hz": 5500,
+        "attack_ms": 0.35,
+        "decay_ms": 165,
+        "sustain": 0.02,
+        "release_ms": 45,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "sine",
+            "gain": 0.95
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "bell",
+          "frequency_hz": 260,
+          "gain_db": -2.0,
+          "q": 1.1
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -22.0,
+        "before_peak_dbfs": -7.42,
+        "applied_trim_change_db": 0,
+        "output_gain_db": 8
+      }
+    },
+    {
+      "id": "v2_needle_click",
+      "name": "Needle — kick attack",
+      "family": "drums",
+      "description": "A short, band-limited noise transient with no low-frequency body.",
+      "register": "Any note",
+      "use": "Separate kick transient channel; keep at least 15 dB below kick body.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 8.6,
+        "stereo_spread": 0,
+        "phase_reset": true,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 6900,
+        "attack_ms": 0.2,
+        "decay_ms": 7,
+        "sustain": 0,
+        "release_ms": 6,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "noise",
+            "gain": 0.6
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 2100
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -52.48,
+        "before_peak_dbfs": -18.6,
+        "applied_trim_change_db": 8.6,
+        "output_gain_db": 8.6
+      }
+    },
+    {
+      "id": "v2_sub_fundamental",
+      "name": "Foundation — audible sub",
+      "family": "bass",
+      "description": "One sine at the requested pitch. No undocumented octave drop and no extra detuned sub.",
+      "register": "MIDI 28–40",
+      "use": "Centered low end. Confirm fundamental is above 30 Hz; sidechain from actual kick audio.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 2,
+        "stereo_spread": 0,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 180,
+        "attack_ms": 5,
+        "decay_ms": 120,
+        "sustain": 0.88,
+        "release_ms": 70,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "sine",
+            "gain": 0.92
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 25
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -21.97,
+        "before_peak_dbfs": -15.18,
+        "applied_trim_change_db": 0,
+        "output_gain_db": 2
+      }
+    },
+    {
+      "id": "v2_torque_pwm",
+      "name": "Torque — narrow PWM mid-bass",
+      "family": "bass",
+      "description": "Two subtly detuned pulse voices with slow pulse-width modulation and a separately filtered triangle body.",
+      "register": "MIDI 36–52",
+      "use": "Rhythmic low-mid movement above the separate sub. Use rests and occasional fifth answers.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 9.35,
+        "stereo_spread": 0,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 1100,
+        "attack_ms": 3,
+        "decay_ms": 190,
+        "sustain": 0.34,
+        "release_ms": 68,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.22,
+        "filter_env_amount": 0.8,
+        "filter_decay_ms": 135,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "square",
+            "gain": 0.36,
+            "unison": 2,
+            "detune_cents": 3,
+            "pulse_width": 0.46,
+            "pulse_width_depth": 0.1,
+            "pulse_width_rate_hz": 0.17
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.25
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 90
+        },
+        {
+          "kind": "bell",
+          "frequency_hz": 320,
+          "q": 1.0,
+          "gain_db": -1.5
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -34.35,
+        "before_peak_dbfs": -17.96,
+        "applied_trim_change_db": 10.35,
+        "output_gain_db": 9.35
+      }
+    },
+    {
+      "id": "v2_friction_fm",
+      "name": "Friction — animated FM accent",
+      "family": "bass",
+      "description": "True two-operator phase modulation, ratio 1.5, with a decaying modulation index. It changes from a rough transient into a rounder tail.",
+      "register": "MIDI 40–57",
+      "use": "Interlocking low-mid accents on a separate channel, not every bass hit.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 9.85,
+        "stereo_spread": 0,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 4100,
+        "attack_ms": 2,
+        "decay_ms": 260,
+        "sustain": 0.2,
+        "release_ms": 100,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0.6,
+        "filter_decay_ms": 180,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "fm",
+            "gain": 0.68,
+            "fm_amount": 0.43,
+            "fm_ratio": 1.5,
+            "fm_decay_ms": 65
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 170
+        },
+        {
+          "kind": "bell",
+          "frequency_hz": 2200,
+          "q": 1.4,
+          "gain_db": -1,
+          "dynamic_threshold_db": -24,
+          "dynamic_ratio": 2,
+          "dynamic_range_db": 3
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -34.64,
+        "before_peak_dbfs": -15.85,
+        "applied_trim_change_db": 9.85,
+        "output_gain_db": 9.85
+      }
+    },
+    {
+      "id": "v2_ceramic_tom",
+      "name": "Ceramic — tuned tom",
+      "family": "drums",
+      "description": "A decaying sine/triangle membrane with a modest pitch fall; different from the FM metal layer.",
+      "register": "MIDI 42–57",
+      "use": "Sparse off-grid percussion answers, using pitches in the bass key.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 5.07,
+        "stereo_spread": 0,
+        "phase_reset": true,
+        "pitch_envelope_semitones": 9,
+        "pitch_decay_ms": 22,
+        "cutoff_hz": 2400,
+        "attack_ms": 0.8,
+        "decay_ms": 105,
+        "sustain": 0,
+        "release_ms": 45,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "sine",
+            "gain": 0.7
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.12,
+            "octave": 1
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 130
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -35.07,
+        "before_peak_dbfs": -17.26,
+        "applied_trim_change_db": 5.07,
+        "output_gain_db": 5.07
+      }
+    },
+    {
+      "id": "v2_foundry_metal",
+      "name": "Foundry — inharmonic metal",
+      "family": "drums",
+      "description": "Inharmonic FM ratio 2.414 with a fast index decay, filtered to leave room for the hats.",
+      "register": "MIDI 57–76",
+      "use": "A few quieter syncopated hits; use delay and pan on its own mixer track.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 12.58,
+        "stereo_spread": 0,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 7200,
+        "attack_ms": 0.4,
+        "decay_ms": 170,
+        "sustain": 0,
+        "release_ms": 120,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.15,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "fm",
+            "gain": 0.55,
+            "fm_ratio": 2.414,
+            "fm_amount": 0.6,
+            "fm_decay_ms": 85
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 800
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -42.58,
+        "before_peak_dbfs": -21.86,
+        "applied_trim_change_db": 12.58,
+        "output_gain_db": 12.58
+      }
+    },
+    {
+      "id": "v2_brushed_air",
+      "name": "Brushed — noise shaker",
+      "family": "drums",
+      "description": "Proper bipolar noise through a high-pass voice filter, with a short shaped tail.",
+      "register": "Any note",
+      "use": "Quiet alternating sixteenth accents, preferably not the same positions as the closed hat.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 15.42,
+        "stereo_spread": 0,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 5200,
+        "attack_ms": 1,
+        "decay_ms": 42,
+        "sustain": 0,
+        "release_ms": 18,
+        "filter_mode": "highpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "noise",
+            "gain": 0.68
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 5000
+        },
+        {
+          "kind": "lowpass",
+          "frequency_hz": 12000
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -47.64,
+        "before_peak_dbfs": -21.42,
+        "applied_trim_change_db": 15.42,
+        "output_gain_db": 15.42
+      }
+    },
+    {
+      "id": "v2_lacquer_stab",
+      "name": "Lacquer — dark harmonic stab",
+      "family": "chords",
+      "description": "A restrained analog saw/triangle dyad voice with a fast filter envelope and short release.",
+      "register": "MIDI 55–74",
+      "use": "One or two notes per hit. Put sustained harmonic support on a different track.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 14.13,
+        "stereo_spread": 0.34,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 2100,
+        "attack_ms": 4,
+        "decay_ms": 210,
+        "sustain": 0.17,
+        "release_ms": 100,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0.9,
+        "filter_decay_ms": 140,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.27,
+            "unison": 3,
+            "detune_cents": 5
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.18
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 320
+        },
+        {
+          "kind": "bell",
+          "frequency_hz": 3400,
+          "q": 1.1,
+          "gain_db": -1,
+          "dynamic_threshold_db": -23,
+          "dynamic_range_db": 3
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -45.1,
+        "before_peak_dbfs": -23.13,
+        "applied_trim_change_db": 17.13,
+        "output_gain_db": 14.13
+      }
+    },
+    {
+      "id": "v2_hollow_resonator",
+      "name": "Hollow — resonant pulse",
+      "family": "arp",
+      "description": "A narrow variable pulse with a resonant bandpass and a small triangle reinforcement.",
+      "register": "MIDI 55–78",
+      "use": "Alternate with the harmonic stab instead of playing both continuously.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 18,
+        "stereo_spread": 0.3,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 1700,
+        "attack_ms": 3,
+        "decay_ms": 220,
+        "sustain": 0.15,
+        "release_ms": 140,
+        "filter_mode": "bandpass",
+        "filter_resonance": 0.5,
+        "filter_env_amount": 1.0,
+        "filter_decay_ms": 130,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "square",
+            "gain": 0.24,
+            "unison": 2,
+            "detune_cents": 4,
+            "pulse_width": 0.3,
+            "pulse_width_depth": 0.06,
+            "pulse_width_rate_hz": 0.13
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.14,
+            "octave": 1
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 500
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -48.63,
+        "before_peak_dbfs": -28.57,
+        "applied_trim_change_db": 18.0,
+        "output_gain_db": 18,
+        "requested_trim_change_db": 22.57,
+        "trim_capped": true
+      }
+    },
+    {
+      "id": "v2_burnished_hook",
+      "name": "Burnished — restrained lead",
+      "family": "lead",
+      "description": "Warm continuous unison with a triangular upper body. No static metallic FM shimmer; motion comes from a slow filter LFO and true oscillator spread.",
+      "register": "MIDI 62–81",
+      "use": "A short recognizable hook, entering after the groove is established. Keep below drum/bass bus.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 13.49,
+        "stereo_spread": 0.6,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 3300,
+        "attack_ms": 18,
+        "decay_ms": 440,
+        "sustain": 0.67,
+        "release_ms": 340,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.12,
+        "filter_env_amount": 0.23,
+        "filter_decay_ms": 550,
+        "lfo_rate_hz": 0.08,
+        "lfo_depth": 0.14,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.24,
+            "unison": 4,
+            "detune_cents": 6
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.13,
+            "octave": 1
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 260
+        },
+        {
+          "kind": "bell",
+          "frequency_hz": 2800,
+          "q": 1.4,
+          "gain_db": -1,
+          "dynamic_threshold_db": -24,
+          "dynamic_ratio": 2,
+          "dynamic_range_db": 3
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -41.49,
+        "before_peak_dbfs": -27.69,
+        "applied_trim_change_db": 17.49,
+        "output_gain_db": 13.49
+      }
+    },
+    {
+      "id": "v2_silk_continuum",
+      "name": "Silk — wide sustained support",
+      "family": "pad",
+      "description": "Three gently detuned triangle voices with a quiet saw core, slow amplitude envelope and no amplitude tremolo.",
+      "register": "MIDI 50–74",
+      "use": "Sustained single notes or fifths. High-pass the support and leave the lead center clear.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 10.37,
+        "stereo_spread": 0.85,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 2400,
+        "attack_ms": 180,
+        "decay_ms": 700,
+        "sustain": 0.7,
+        "release_ms": 700,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.1,
+        "filter_env_amount": 0,
+        "filter_decay_ms": 200,
+        "lfo_rate_hz": 0.05,
+        "lfo_depth": 0.18,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "triangle",
+            "gain": 0.28,
+            "unison": 3,
+            "detune_cents": 8
+          },
+          {
+            "waveform": "saw",
+            "gain": 0.08,
+            "unison": 2,
+            "detune_cents": 4
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 420
+        },
+        {
+          "kind": "lowpass",
+          "frequency_hz": 6200
+        }
+      ],
+      "engine_revision": 2,
+      "calibration": {
+        "probe": "Two-bar MIDI phrase at 48 kHz; active-window RMS; pre-master",
+        "before_active_rms_dbfs": -43.37,
+        "before_peak_dbfs": -30.97,
+        "applied_trim_change_db": 16.37,
+        "output_gain_db": 10.37
+      }
+    },
+    {
+      "id": "v3_dark_reese",
+      "name": "Blackroom — sustained analog Reese",
+      "family": "bass",
+      "description": "A centered, low-passed analog saw bass with a restrained sine foundation and triangle body. No FM, metallic resonator, pulse animation, or pluck envelope. Built to hold the groove beneath a four-on-the-floor kick.",
+      "register": "MIDI 36–52",
+      "use": "Default mid-bass for club_drive. Use a root/fifth 8th-note pattern with contiguous 0.50-beat gates; keep sub on its own centered track.",
+      "sound": {
+        "waveform": "saw",
+        "output_gain_db": 7.5,
+        "stereo_spread": 0,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 760,
+        "attack_ms": 6,
+        "decay_ms": 320,
+        "sustain": 0.72,
+        "release_ms": 125,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.14,
+        "filter_env_amount": 0.16,
+        "filter_decay_ms": 560,
+        "lfo_rate_hz": 0,
+        "lfo_depth": 0,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.45,
+            "unison": 1,
+            "cutoff_hz": 1050,
+            "filter_resonance": 0.11,
+            "attack_ms": 5,
+            "decay_ms": 320,
+            "sustain": 0.76,
+            "release_ms": 155,
+            "pan": -0.04
+          },
+          {
+            "waveform": "sine",
+            "gain": 0.15,
+            "unison": 1,
+            "cutoff_hz": 230,
+            "filter_resonance": 0.0,
+            "attack_ms": 2,
+            "decay_ms": 380,
+            "sustain": 0.92,
+            "release_ms": 175,
+            "pan": 0.0
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.2,
+            "unison": 1,
+            "cutoff_hz": 2200,
+            "filter_resonance": 0.04,
+            "attack_ms": 8,
+            "decay_ms": 240,
+            "sustain": 0.32,
+            "release_ms": 120,
+            "pan": 0.08
+          }
+        ],
+        "legato": true
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 75
+        },
+        {
+          "kind": "lowpass",
+          "frequency_hz": 1800
+        }
+      ],
+      "engine_revision": 3
+    },
+    {
+      "id": "v3_dark_lead",
+      "name": "Blackroom — dark sustained lead",
+      "family": "lead",
+      "description": "A restrained analog saw/triangle lead with slow onset, moderate sustain and only gentle filter motion. Avoids choir/formant and inharmonic FM timbres that can read as arcade or game scoring.",
+      "register": "MIDI 60–79",
+      "use": "Short 1–2 bar motifs with phrase rests. Use long enough gates to let the tone bloom; keep it behind the kick and bass.",
+      "sound": {
+        "waveform": "sine",
+        "output_gain_db": 8.0,
+        "stereo_spread": 0.22,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 2400,
+        "attack_ms": 45,
+        "decay_ms": 520,
+        "sustain": 0.68,
+        "release_ms": 420,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.08,
+        "filter_env_amount": 0.12,
+        "filter_decay_ms": 850,
+        "lfo_rate_hz": 0.07,
+        "lfo_depth": 0.1,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.34,
+            "unison": 2,
+            "detune_cents": 2.5,
+            "cutoff_hz": 1900,
+            "filter_resonance": 0.07,
+            "attack_ms": 42,
+            "decay_ms": 520,
+            "sustain": 0.68,
+            "release_ms": 450,
+            "pan": -0.08
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.16,
+            "octave": 1,
+            "unison": 1,
+            "cutoff_hz": 2450,
+            "filter_resonance": 0.04,
+            "attack_ms": 65,
+            "decay_ms": 520,
+            "sustain": 0.44,
+            "release_ms": 370,
+            "pan": 0.12
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 220
+        },
+        {
+          "kind": "bell",
+          "frequency_hz": 2800,
+          "q": 1.1,
+          "gain_db": -1
+        }
+      ],
+      "engine_revision": 3
+    },
+    {
+      "id": "v4_pressure_reese",
+      "name": "Blackroom — pressure Reese",
+      "family": "bass",
+      "description": "A dark, persistent club bass with separate saw body, sine foundation and filtered triangle edge. Each layer has its own envelope, cutoff and pan. Avoids FM, metallic resonators and arcade-style pitch sweeps.",
+      "register": "MIDI 34–52",
+      "use": "Alternative club_drive bass. Sustained root/fifth motion; sidechain to kick. Layers have separate roles and remain mono-compatible at low frequencies.",
+      "sound": {
+        "waveform": "saw",
+        "output_gain_db": 7.5,
+        "stereo_spread": 0.14,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 1050,
+        "attack_ms": 4,
+        "decay_ms": 340,
+        "sustain": 0.78,
+        "release_ms": 165,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.12,
+        "filter_env_amount": 0.12,
+        "filter_decay_ms": 700,
+        "lfo_rate_hz": 0.09,
+        "lfo_depth": 0.07,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.42,
+            "unison": 2,
+            "detune_cents": 5.5,
+            "pan": -0.05,
+            "cutoff_hz": 1050,
+            "filter_resonance": 0.11,
+            "attack_ms": 4,
+            "decay_ms": 340,
+            "sustain": 0.76,
+            "release_ms": 170
+          },
+          {
+            "waveform": "sine",
+            "gain": 0.24,
+            "octave": -1,
+            "unison": 1,
+            "pan": 0,
+            "cutoff_hz": 155,
+            "filter_resonance": 0,
+            "attack_ms": 2,
+            "decay_ms": 380,
+            "sustain": 0.92,
+            "release_ms": 180
+          },
+          {
+            "waveform": "triangle",
+            "gain": 0.18,
+            "unison": 1,
+            "pan": 0.1,
+            "cutoff_hz": 2300,
+            "filter_resonance": 0.04,
+            "attack_ms": 8,
+            "decay_ms": 240,
+            "sustain": 0.32,
+            "release_ms": 120
+          }
+        ],
+        "legato": true
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 65
+        },
+        {
+          "kind": "lowpass",
+          "frequency_hz": 3000
+        }
+      ],
+      "engine_revision": 4
+    },
+    {
+      "id": "v4_noir_lead",
+      "name": "Blackroom — noir lead",
+      "family": "lead",
+      "description": "A compact subtractive techno lead: a driven saw body with a restrained square harmonic layer, shaped for short, connected riffs rather than bell-like tails.",
+      "register": "MIDI 58–80",
+      "use": "Use for evolving, syncopated phrases. Keep the riff articulated; lengthen the envelope only when the arrangement calls for a held note.",
+      "sound": {
+        "waveform": "saw",
+        "output_gain_db": 0,
+        "stereo_spread": 0.12,
+        "phase_reset": false,
+        "pitch_envelope_semitones": 0,
+        "pitch_decay_ms": 80,
+        "cutoff_hz": 1750,
+        "attack_ms": 7,
+        "decay_ms": 280,
+        "sustain": 0.38,
+        "release_ms": 135,
+        "filter_mode": "lowpass",
+        "filter_resonance": 0.07,
+        "filter_env_amount": 0.22,
+        "filter_decay_ms": 420,
+        "lfo_rate_hz": 0.13,
+        "lfo_depth": 0.06,
+        "lfo_target": "cutoff",
+        "layers": [
+          {
+            "waveform": "saw",
+            "gain": 0.56,
+            "unison": 1,
+            "detune_cents": 0,
+            "pan": -0.04,
+            "cutoff_hz": 1750,
+            "filter_resonance": 0.07,
+            "attack_ms": 7,
+            "decay_ms": 280,
+            "sustain": 0.38,
+            "release_ms": 135
+          },
+          {
+            "waveform": "square",
+            "gain": 0.18,
+            "unison": 1,
+            "pan": 0.05,
+            "cutoff_hz": 950,
+            "filter_resonance": 0.05,
+            "attack_ms": 3,
+            "decay_ms": 190,
+            "sustain": 0.2,
+            "release_ms": 85
+          }
+        ]
+      },
+      "recommended_eq": [
+        {
+          "kind": "highpass",
+          "frequency_hz": 180
+        },
+        {
+          "kind": "bell",
+          "frequency_hz": 3200,
+          "q": 1.1,
+          "gain_db": -1.5
+        }
+      ],
+      "engine_revision": 4
+    }
+  ]
+}

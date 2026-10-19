@@ -1,0 +1,14 @@
+/target/
+/renders/
+/work/
+/outputs/
+/evals/
+/.DS_Store
+**/.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.json.tmp
+*.m4a
+*.mp3
